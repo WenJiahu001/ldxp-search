@@ -1,0 +1,47 @@
+{
+  "name": "ldxp-source-search",
+  "version": "0.1.0",
+  "description": "A static React tool for paginated LDXP source goods search.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run build"
+  },
+  "keywords": [
+    "ldxp",
+    "source-goods",
+    "merchant",
+    "react",
+    "vite"
+  ],
+  "dependencies": {
+    "@tanstack/react-query": "^5.81.5",
+    "@tanstack/react-table": "^8.21.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^2.6.0",
+    "tailwindcss-animate": "^1.0.7",
+    "vite": "^8.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2"
+  }
+}
