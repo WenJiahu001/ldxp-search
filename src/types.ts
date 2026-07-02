@@ -18,6 +18,7 @@ export interface LdxpGoods {
     name?: string;
   };
   user?: {
+    link?: string;
     nickname?: string;
     avatar?: string;
     contact_qq?: string;

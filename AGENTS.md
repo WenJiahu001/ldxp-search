@@ -64,6 +64,15 @@
 - `agent_price_limit`：限制售价/最低售价
 - `agent_price1`、`agent_price2`、`agent_price3`：不同代理等级价格
 
+页面显示商家信息时可用字段：
+
+- `user.link`：商家店铺链接
+- `user.nickname`：商家昵称
+- `user.avatar`：商家头像
+- `user.contact_qq`：QQ 联系方式
+- `user.contact_mobile`：手机、群号或商家填写的联系文本
+- `user.contact_wechat`：微信或商家填写的其他联系文本
+
 ## 本地存储
 
 - `ldxp-merchant-token`：当前 Token。

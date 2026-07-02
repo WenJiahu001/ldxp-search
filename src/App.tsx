@@ -6,7 +6,26 @@ import {
   getCoreRowModel,
   useReactTable
 } from "@tanstack/react-table";
-import { AlertCircle, ChevronLeft, ChevronRight, ExternalLink, Eye, EyeOff, Loader2, Search, X } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Clipboard,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  Filter,
+  History,
+  KeyRound,
+  Loader2,
+  RotateCcw,
+  Search,
+  ShieldCheck,
+  SlidersHorizontal,
+  Store,
+  X
+} from "lucide-react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -172,15 +191,23 @@ function stockValue(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function contactText(goods: LdxpGoods) {
-  const contact = goods.user;
+function userContactItems(goods: LdxpGoods) {
+  const user = goods.user;
   return [
-    contact?.contact_qq && `QQ ${contact.contact_qq}`,
-    contact?.contact_mobile,
-    contact?.contact_wechat && `微信 ${contact.contact_wechat}`
-  ]
-    .filter(Boolean)
-    .join(" / ");
+    user?.contact_qq && { label: "QQ", value: user.contact_qq },
+    user?.contact_mobile && { label: "手机/群", value: user.contact_mobile },
+    user?.contact_wechat && { label: "微信/其他", value: user.contact_wechat }
+  ].filter((item): item is { label: string; value: string } => Boolean(item));
+}
+
+function userContactText(goods: LdxpGoods) {
+  const user = goods.user;
+  const parts = [
+    user?.nickname && `商家：${user.nickname}`,
+    user?.link && `店铺：${user.link}`,
+    ...userContactItems(goods).map((item) => `${item.label}：${item.value}`)
+  ];
+  return parts.filter(Boolean).join("\n");
 }
 
 function normalizeMerchantToken(input: string) {
@@ -240,6 +267,7 @@ function normalizeGoods(item: unknown): LdxpGoods {
       name: category.name as string | undefined
     },
     user: {
+      link: user.link as string | undefined,
       nickname: user.nickname as string | undefined,
       avatar: user.avatar as string | undefined,
       contact_qq: user.contact_qq as string | undefined,
@@ -328,6 +356,7 @@ export default function App() {
   const [showToken, setShowToken] = useState(false);
   const [submitted, setSubmitted] = useState<SearchParams | null>(null);
   const [formError, setFormError] = useState("");
+  const [copiedSellerId, setCopiedSellerId] = useState<string | number | null>(null);
 
   const query = useQuery({
     queryKey: ["search", submitted],
@@ -446,13 +475,65 @@ export default function App() {
       {
         id: "seller",
         header: "商家",
-        size: 220,
+        size: 330,
         cell: ({ row }) => {
           const goods = row.original;
+          const user = goods.user;
+          const contacts = userContactItems(goods);
           return (
-            <div className="min-w-0 text-sm">
-              <div className="truncate font-medium">{goods.user?.nickname || "-"}</div>
-              <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{contactText(goods) || "未展示联系方式"}</div>
+            <div className="flex min-w-0 items-start gap-2 text-sm">
+              {user?.avatar ? (
+                <img
+                  className="mt-0.5 h-9 w-9 shrink-0 rounded object-cover"
+                  src={user.avatar}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="mt-0.5 h-9 w-9 shrink-0 rounded bg-muted" />
+              )}
+              <div className="min-w-0 space-y-1">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate font-medium">{user?.nickname || "-"}</span>
+                  {user?.link ? (
+                    <a
+                      className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                      href={user.link}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label="打开商家店铺"
+                      title="打开商家店铺"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  ) : null}
+                  {userContactText(goods) ? (
+                    <button
+                      type="button"
+                      className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border border-input text-muted-foreground transition-colors duration-200 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      onClick={() => void copySellerContact(goods)}
+                      aria-label="复制商家信息"
+                      title="复制商家信息"
+                    >
+                      {copiedSellerId === goods.id ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
+                    </button>
+                  ) : null}
+                </div>
+                <div className="space-y-0.5 text-xs text-muted-foreground">
+                  {user?.link ? <div className="break-all">店铺：{user.link}</div> : null}
+                  {contacts.length > 0 ? (
+                    contacts.map((contact) => (
+                      <div key={contact.label} className="break-words">
+                        {contact.label}：{contact.value}
+                      </div>
+                    ))
+                  ) : (
+                    <div>未展示联系方式</div>
+                  )}
+                </div>
+              </div>
             </div>
           );
         }
@@ -487,7 +568,7 @@ export default function App() {
           )
       }
     ],
-    []
+    [copiedSellerId]
   );
 
   const table = useReactTable({
@@ -546,29 +627,66 @@ export default function App() {
     submitSearch(1);
   }
 
+  async function copySellerContact(goods: LdxpGoods) {
+    const text = userContactText(goods);
+    if (!text) return;
+
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedSellerId(goods.id);
+      window.setTimeout(() => setCopiedSellerId((value) => (value === goods.id ? null : value)), 1400);
+    } catch {
+      setFormError("复制失败，请检查浏览器剪贴板权限。");
+    }
+  }
+
   const statusText = query.data
     ? `命中 ${query.data.total} 条，当前第 ${query.data.current}/${query.data.pageCount} 页，展示 ${query.data.count} 条`
     : "等待搜索";
+  const activeFilterCount = [onlyNormal, onlyInStock, minPrice !== "", maxPrice !== ""].filter(Boolean).length;
 
   return (
     <main className="min-h-screen bg-background text-foreground">
+      <a
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:shadow"
+        href="#results"
+      >
+        跳到结果
+      </a>
+
       <section className="border-b border-border bg-card">
         <form className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3" onSubmit={handleSubmit}>
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h1 className="text-lg font-semibold tracking-normal">LDXP 货源分页搜索</h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">按接口分页查询；点击搜索或按回车触发。</p>
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+                <Store className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="truncate text-base font-semibold tracking-normal">LDXP 货源搜索</h1>
+                <p className="mt-0.5 text-xs text-muted-foreground">分页查询，当前页排序筛选，Token 仅保存在本机。</p>
+              </div>
             </div>
-            <div className="text-sm text-muted-foreground">{statusText}</div>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge className="bg-blue-50 text-blue-700">{statusText}</Badge>
+              {activeFilterCount > 0 ? (
+                <Badge className="border-amber-200 bg-amber-50 text-amber-700">
+                  <Filter className="mr-1 h-3 w-3" />
+                  {activeFilterCount} 个筛选
+                </Badge>
+              ) : (
+                <Badge>无额外筛选</Badge>
+              )}
+            </div>
           </div>
 
-          <div className="grid gap-2 lg:grid-cols-[minmax(260px,1fr)_minmax(520px,1.6fr)_auto] lg:items-end">
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-muted-foreground">商品关键词</span>
-              <div className="grid gap-2 sm:grid-cols-[minmax(180px,1fr)_150px]">
+          <div className="grid gap-2 rounded-md border border-border bg-background p-2 lg:grid-cols-[minmax(260px,0.9fr)_minmax(360px,1.2fr)_auto] lg:items-end">
+            <div className="grid gap-2 sm:grid-cols-[minmax(180px,1fr)_144px]">
+              <label className="block" htmlFor="keyword">
+                <span className="mb-1 block text-xs font-medium text-muted-foreground">商品关键词</span>
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
+                    id="keyword"
                     className="pl-9"
                     value={keyword}
                     onChange={(event) => setKeyword(event.target.value)}
@@ -576,35 +694,49 @@ export default function App() {
                     autoFocus
                   />
                 </div>
+              </label>
+              <label className="block" htmlFor="keyword-history">
+                <span className="mb-1 block text-xs font-medium text-muted-foreground">最近关键词</span>
                 <select
-                  className="h-10 min-w-0 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  id="keyword-history"
+                  className="h-10 w-full min-w-0 cursor-pointer rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-ring"
                   value=""
                   onChange={(event) => {
                     if (event.target.value) setKeyword(event.target.value);
                   }}
                   aria-label="选择历史关键词"
                 >
-                  <option value="">历史关键词</option>
+                  <option value="">选择历史</option>
                   {keywordHistory.map((item) => (
                     <option key={item} value={item}>
                       {item}
                     </option>
                   ))}
                 </select>
-              </div>
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-muted-foreground">Merchant-Token</span>
-              <div className="grid gap-2 xl:grid-cols-[minmax(220px,1fr)_190px_auto_auto_auto]">
-                <Input
-                  value={token}
-                  onChange={(event) => setToken(event.target.value)}
-                  placeholder="粘贴 Merchant-Token 或 auth-token JSON"
-                  type={showToken ? "text" : "password"}
-                  autoComplete="off"
-                />
+              </label>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_150px_auto_auto_auto]">
+              <label className="block" htmlFor="merchant-token">
+                <span className="mb-1 block text-xs font-medium text-muted-foreground">Merchant-Token</span>
+                <div className="relative">
+                  <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="merchant-token"
+                    className="pl-9"
+                    value={token}
+                    onChange={(event) => setToken(event.target.value)}
+                    placeholder="粘贴 Merchant-Token 或 auth-token JSON"
+                    type={showToken ? "text" : "password"}
+                    autoComplete="off"
+                  />
+                </div>
+              </label>
+              <label className="block" htmlFor="token-history">
+                <span className="mb-1 block text-xs font-medium text-muted-foreground">历史 Token</span>
                 <select
-                  className="h-10 min-w-0 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  id="token-history"
+                  className="h-10 w-full min-w-0 cursor-pointer rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-ring"
                   value=""
                   onChange={(event) => {
                     if (event.target.value) setToken(event.target.value);
@@ -618,64 +750,84 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-                <Button type="button" variant="outline" size="sm" onClick={() => setShowToken((value) => !value)}>
-                  {showToken ? <EyeOff className="mr-1 h-4 w-4" /> : <Eye className="mr-1 h-4 w-4" />}
-                  {showToken ? "隐藏" : "显示"}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setToken("");
-                    window.localStorage.removeItem(tokenStorageKey);
-                  }}
-                >
-                  <X className="mr-1 h-4 w-4" />
-                  清空当前
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setTokenHistory([]);
-                    window.localStorage.removeItem(tokenHistoryStorageKey);
-                    window.localStorage.removeItem(tokenStorageKey);
-                    setToken("");
-                  }}
-                >
-                  清空历史
-                </Button>
-              </div>
-            </label>
-            <Button type="submit" disabled={query.isFetching}>
+              </label>
+              <Button
+                className="self-end"
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setShowToken((value) => !value)}
+                aria-label={showToken ? "隐藏 Token" : "显示 Token"}
+                title={showToken ? "隐藏 Token" : "显示 Token"}
+              >
+                {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
+              <Button
+                className="self-end"
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => {
+                  setToken("");
+                  window.localStorage.removeItem(tokenStorageKey);
+                }}
+                aria-label="清空当前 Token"
+                title="清空当前 Token"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+              <Button
+                className="self-end"
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => {
+                  setTokenHistory([]);
+                  window.localStorage.removeItem(tokenHistoryStorageKey);
+                  window.localStorage.removeItem(tokenStorageKey);
+                  setToken("");
+                }}
+                aria-label="清空 Token 历史"
+                title="清空 Token 历史"
+              >
+                <History className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <Button className="h-10 lg:self-end" type="submit" disabled={query.isFetching}>
               {query.isFetching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
               搜索
             </Button>
           </div>
 
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-wrap gap-2">
-              {goodsTypes.map((item) => (
-                <Button
-                  key={item.value}
-                  type="button"
-                  variant={type === item.value ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setType(item.value)}
-                >
-                  {item.label}
-                </Button>
-              ))}
+          <div className="grid gap-2 rounded-md border border-border bg-muted/30 p-2 xl:grid-cols-[minmax(260px,auto)_180px_110px_110px_minmax(280px,1fr)] xl:items-end">
+            <div>
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                商品类型
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {goodsTypes.map((item) => (
+                  <Button
+                    key={item.value}
+                    type="button"
+                    variant={type === item.value ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setType(item.value)}
+                  >
+                    {item.label}
+                  </Button>
+                ))}
+              </div>
             </div>
-          </div>
-
-          <div className="grid gap-2 rounded-md border border-border bg-muted/30 p-2 lg:grid-cols-[180px_110px_110px_auto] lg:items-end">
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-muted-foreground">当前页排序</span>
+            <label className="block" htmlFor="sort-key">
+              <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                当前页排序
+              </span>
               <select
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                id="sort-key"
+                className="h-10 w-full cursor-pointer rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-ring"
                 value={sortKey}
                 onChange={(event) => {
                   const next = event.target.value as SortKey;
@@ -694,53 +846,75 @@ export default function App() {
                 <option value="stock_desc">库存降序</option>
               </select>
             </label>
-            <label className="block">
+            <label className="block" htmlFor="min-price">
               <span className="mb-1 block text-xs font-medium text-muted-foreground">最低价</span>
-              <Input value={minPrice} onChange={(event) => setMinPrice(event.target.value)} min={0} step="0.01" type="number" />
+              <Input
+                id="min-price"
+                value={minPrice}
+                onChange={(event) => setMinPrice(event.target.value)}
+                min={0}
+                step="0.01"
+                type="number"
+                inputMode="decimal"
+              />
             </label>
-            <label className="block">
+            <label className="block" htmlFor="max-price">
               <span className="mb-1 block text-xs font-medium text-muted-foreground">最高价</span>
-              <Input value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} min={0} step="0.01" type="number" />
+              <Input
+                id="max-price"
+                value={maxPrice}
+                onChange={(event) => setMaxPrice(event.target.value)}
+                min={0}
+                step="0.01"
+                type="number"
+                inputMode="decimal"
+              />
             </label>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant={onlyNormal ? "default" : "outline"}
-                size="sm"
-                onClick={() => setOnlyNormal((value) => !value)}
-              >
-                只看正常上架
-              </Button>
-              <Button
-                type="button"
-                variant={onlyInStock ? "default" : "outline"}
-                size="sm"
-                onClick={() => setOnlyInStock((value) => !value)}
-              >
-                只看有库存
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setSortKey("default");
-                  setOnlyNormal(false);
-                  setOnlyInStock(false);
-                  setMinPrice("");
-                  setMaxPrice("");
-                  window.localStorage.setItem("ldxp-sort-key", "default");
-                }}
-              >
-                重置排序筛选
-              </Button>
+            <div>
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <Filter className="h-3.5 w-3.5" />
+                快速筛选
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  type="button"
+                  variant={onlyNormal ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setOnlyNormal((value) => !value)}
+                >
+                  只看正常上架
+                </Button>
+                <Button
+                  type="button"
+                  variant={onlyInStock ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setOnlyInStock((value) => !value)}
+                >
+                  只看有库存
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSortKey("default");
+                    setOnlyNormal(false);
+                    setOnlyInStock(false);
+                    setMinPrice("");
+                    setMaxPrice("");
+                    window.localStorage.setItem("ldxp-sort-key", "default");
+                  }}
+                >
+                  <RotateCcw className="mr-1 h-4 w-4" />
+                  重置
+                </Button>
+              </div>
             </div>
-            <div className="text-xs text-muted-foreground lg:col-span-4">排序和筛选仅作用于当前页。</div>
           </div>
         </form>
       </section>
 
-      <section className="mx-auto max-w-7xl px-4 py-4">
+      <section id="results" className="mx-auto max-w-7xl px-4 py-4">
         {(formError || query.error) && (
           <div className="mb-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -761,61 +935,68 @@ export default function App() {
           <EmptyState title="当前页没有商品" description="换一个关键词、类型，或调整页码和每页数量。" />
         ) : (
           <>
-            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div className="text-sm text-muted-foreground">
-                {statusText}
-                {rawRowsCount !== rows.length ? `，筛选后 ${rows.length} 条` : ""}
-              </div>
-              <div className="flex flex-wrap items-end gap-2">
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-muted-foreground">页码</span>
-                  <Input
-                    className="h-9 w-20"
-                    value={current}
-                    onChange={(event) => setCurrent(Math.max(1, Number(event.target.value) || 1))}
-                    min={1}
-                    type="number"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-muted-foreground">每页数量</span>
-                  <Input
-                    className="h-9 w-24"
-                    value={pageSize}
-                    onChange={(event) => setPageSize(Math.max(1, Number(event.target.value) || 1))}
-                    min={1}
-                    type="number"
-                  />
-                </label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={query.isFetching || safeCurrent <= 1}
-                  onClick={() => submitSearch(safeCurrent - 1)}
-                >
-                  <ChevronLeft className="mr-1 h-4 w-4" />
-                  上一页
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={query.isFetching || safeCurrent >= pageCount}
-                  onClick={() => submitSearch(safeCurrent + 1)}
-                >
-                  下一页
-                  <ChevronRight className="ml-1 h-4 w-4" />
-                </Button>
+            <div className="mb-3 rounded-md border border-border bg-card px-3 py-2">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <Badge className="bg-blue-50 text-blue-700">{statusText}</Badge>
+                  {rawRowsCount !== rows.length ? <Badge>筛选后 {rows.length} 条</Badge> : null}
+                  <span className="text-xs text-muted-foreground">排序和筛选仅作用于当前页。</span>
+                </div>
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="block" htmlFor="page-current">
+                    <span className="mb-1 block text-xs font-medium text-muted-foreground">页码</span>
+                    <Input
+                      id="page-current"
+                      className="h-9 w-20"
+                      value={current}
+                      onChange={(event) => setCurrent(Math.max(1, Number(event.target.value) || 1))}
+                      min={1}
+                      type="number"
+                      inputMode="numeric"
+                    />
+                  </label>
+                  <label className="block" htmlFor="page-size">
+                    <span className="mb-1 block text-xs font-medium text-muted-foreground">每页</span>
+                    <Input
+                      id="page-size"
+                      className="h-9 w-24"
+                      value={pageSize}
+                      onChange={(event) => setPageSize(Math.max(1, Number(event.target.value) || 1))}
+                      min={1}
+                      type="number"
+                      inputMode="numeric"
+                    />
+                  </label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={query.isFetching || safeCurrent <= 1}
+                    onClick={() => submitSearch(safeCurrent - 1)}
+                  >
+                    <ChevronLeft className="mr-1 h-4 w-4" />
+                    上一页
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={query.isFetching || safeCurrent >= pageCount}
+                    onClick={() => submitSearch(safeCurrent + 1)}
+                  >
+                    下一页
+                    <ChevronRight className="ml-1 h-4 w-4" />
+                  </Button>
+                </div>
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-md border border-border bg-card">
+            <div className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
               <div className="overflow-x-auto">
-                <div className="min-w-[1110px]">
-                  <div className="grid border-b border-border bg-muted/60" style={{ gridTemplateColumns: table.getAllLeafColumns().map((column) => `${column.getSize()}px`).join(" ") }}>
+                <div className="min-w-[1220px]">
+                  <div className="grid border-b border-border bg-muted/70" style={{ gridTemplateColumns: table.getAllLeafColumns().map((column) => `${column.getSize()}px`).join(" ") }}>
                     {table.getHeaderGroups()[0]?.headers.map((header) => (
-                      <div key={header.id} className="px-3 py-2 text-left text-xs font-semibold text-muted-foreground">
+                      <div key={header.id} className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-normal text-muted-foreground">
                         {flexRender(header.column.columnDef.header, header.getContext())}
                       </div>
                     ))}
@@ -824,7 +1005,7 @@ export default function App() {
                     {table.getRowModel().rows.map((row) => (
                       <div
                         key={row.id}
-                        className="grid min-h-[74px] border-b border-border bg-card transition-colors hover:bg-muted/40"
+                        className="grid min-h-[82px] border-b border-border bg-card transition-colors duration-200 hover:bg-blue-50/45"
                         style={{
                           gridTemplateColumns: table.getAllLeafColumns().map((column) => `${column.getSize()}px`).join(" ")
                         }}
