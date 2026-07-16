@@ -9,6 +9,7 @@ import {
 import {
   AlertCircle,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clipboard,
@@ -16,9 +17,8 @@ import {
   Eye,
   EyeOff,
   Filter,
-  History,
-  KeyRound,
   Loader2,
+  LockKeyhole,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -32,10 +32,9 @@ import { Input } from "./components/ui/input";
 import type { GoodsType, LdxpGoods, SearchResponse } from "./types";
 
 const tokenStorageKey = "ldxp-merchant-token";
-const tokenHistoryStorageKey = "ldxp-merchant-token-history";
+const loginCredentialsStorageKey = "ldxp-login-credentials";
 const lastSearchStorageKey = "ldxp-last-search-state";
 const keywordHistoryStorageKey = "ldxp-keyword-history";
-const maxTokenHistory = 8;
 const maxKeywordHistory = 20;
 
 const goodsTypes: Array<{ value: GoodsType; label: string }> = [
@@ -58,15 +57,29 @@ interface SearchParams {
   type: GoodsType;
   current: number;
   pageSize: number;
-  token: string;
+  requestId: number;
 }
 
 type LdxpGoodsType = "" | "card" | "article" | "resource" | "equity";
+type AuthStatus = "missing" | "ready" | "logging_in" | "refreshing" | "error";
 
 interface LdxpResponse<T> {
   code: number;
   msg?: string;
   data?: T;
+}
+
+interface LoginCredentials {
+  username: string;
+  password: string;
+}
+
+interface LoginData {
+  merchant_token?: string;
+}
+
+interface SafeModeData {
+  safe_mode?: number | string;
 }
 
 interface SearchGoodsData {
@@ -141,15 +154,6 @@ function normalizeSearchState(value: Partial<SearchState> | null | undefined): S
   };
 }
 
-function loadTokenHistory() {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(tokenHistoryStorageKey) || "[]");
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
-  } catch {
-    return [];
-  }
-}
-
 function loadLastSearchState() {
   try {
     return normalizeSearchState(JSON.parse(window.localStorage.getItem(lastSearchStorageKey) || "null"));
@@ -169,10 +173,25 @@ function loadKeywordHistory() {
   }
 }
 
-function maskToken(token: string) {
-  const trimmed = token.trim();
-  if (trimmed.length <= 14) return trimmed || "空 Token";
-  return `${trimmed.slice(0, 8)}...${trimmed.slice(-6)}`;
+function loadCredentials(): LoginCredentials {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(loginCredentialsStorageKey) || "null") as Partial<LoginCredentials> | null;
+    return {
+      username: typeof parsed?.username === "string" ? parsed.username : "",
+      password: typeof parsed?.password === "string" ? parsed.password : ""
+    };
+  } catch {
+    return { username: "", password: "" };
+  }
+}
+
+function saveCredentials(credentials: LoginCredentials) {
+  window.localStorage.setItem(loginCredentialsStorageKey, JSON.stringify(credentials));
+}
+
+function clearCredentials() {
+  window.localStorage.removeItem(loginCredentialsStorageKey);
+  window.localStorage.removeItem(tokenStorageKey);
 }
 
 function formatPrice(value: unknown) {
@@ -210,37 +229,71 @@ function userContactText(goods: LdxpGoods) {
   return parts.filter(Boolean).join("\n");
 }
 
-function normalizeMerchantToken(input: string) {
-  let normalized = input.trim();
+class AuthExpiredError extends Error {
+  constructor(message = "Token 已失效，请重新登录。") {
+    super(message);
+    this.name = "AuthExpiredError";
+  }
+}
 
-  if (!normalized) return "";
+function isAuthExpiredPayload(payload: Pick<LdxpResponse<unknown>, "code" | "msg"> | null | undefined) {
+  const message = String(payload?.msg || "");
+  return payload?.code === 401 || message.includes("请先登录") || message.toLowerCase().includes("token");
+}
 
-  const headerMatch = normalized.match(/^Merchant-Token\s*:\s*(.+)$/i);
-  if (headerMatch?.[1]) {
-    normalized = headerMatch[1].trim();
+function isAuthExpiredError(error: unknown) {
+  return error instanceof AuthExpiredError;
+}
+
+async function postLdxp<T>(path: string, body: Record<string, unknown> = {}, merchantToken?: string): Promise<LdxpResponse<T>> {
+  let response: Response;
+  try {
+    response = await fetch(`https://pay.ldxp.cn${path}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        ...(merchantToken ? { "Merchant-Token": merchantToken } : {})
+      },
+      body: JSON.stringify(body)
+    });
+  } catch {
+    throw new Error("请求 LDXP 失败：请检查网络，或 LDXP 是否仍允许当前页面跨域调用接口。");
   }
 
-  if ((normalized.startsWith("{") && normalized.endsWith("}")) || (normalized.startsWith('"') && normalized.endsWith('"'))) {
-    try {
-      const parsed = JSON.parse(normalized) as unknown;
-      if (typeof parsed === "string") {
-        normalized = parsed.trim();
-      } else if (parsed && typeof parsed === "object") {
-        const record = parsed as Record<string, unknown>;
-        if (typeof record.value === "string") {
-          normalized = record.value.trim();
-        } else if (typeof record.merchant_token === "string") {
-          normalized = record.merchant_token.trim();
-        } else if (typeof record.token === "string") {
-          normalized = record.token.trim();
-        }
-      }
-    } catch {
-      // 非 JSON 文本按原 Token 继续处理。
+  const payload = (await response.json().catch(() => ({}))) as LdxpResponse<T>;
+  if (!response.ok) {
+    if (response.status === 401 || isAuthExpiredPayload(payload)) {
+      throw new AuthExpiredError();
     }
+    throw new Error(payload.msg || "请求 LDXP 接口失败，请检查网络或 CORS。");
+  }
+  return payload;
+}
+
+async function loginWithCredentials(credentials: LoginCredentials): Promise<string> {
+  const username = credentials.username.trim();
+  const password = credentials.password;
+  if (!username || !password.trim()) {
+    throw new Error("请先填写 LDXP 用户名和密码。");
   }
 
-  return normalized.replace(/^Bearer\s+/i, "").trim();
+  const loginBody = { username, password };
+  const safePayload = await postLdxp<SafeModeData>("/merchantApi/user/checkSafeMode", loginBody);
+  if (safePayload.code !== 1) {
+    throw new Error(safePayload.msg || "安全验证检查失败。");
+  }
+  if (Number(safePayload.data?.safe_mode || 0) !== 0) {
+    throw new Error("该账号开启了二级密码或邮箱验证，当前工具暂不支持自动登录。");
+  }
+
+  const loginPayload = await postLdxp<LoginData>("/merchantApi/user/login", loginBody);
+  if (loginPayload.code !== 1 || !loginPayload.data?.merchant_token) {
+    throw new Error(loginPayload.msg || "登录失败，未获取到 Merchant-Token。");
+  }
+
+  window.localStorage.setItem(tokenStorageKey, loginPayload.data.merchant_token);
+  return loginPayload.data.merchant_token;
 }
 
 function normalizeGoods(item: unknown): LdxpGoods {
@@ -286,41 +339,37 @@ function normalizeGoods(item: unknown): LdxpGoods {
   };
 }
 
-async function fetchSearch(params: SearchParams): Promise<SearchResponse> {
-  const merchantToken = normalizeMerchantToken(params.token);
+async function fetchSearch(params: SearchParams, getMerchantToken: (forceLogin?: boolean) => Promise<string>): Promise<SearchResponse> {
   const goodsType = (params.type === "all" ? "" : params.type) as LdxpGoodsType;
 
-  let response: Response;
-  try {
-    response = await fetch("https://pay.ldxp.cn/merchantApi/MyParent/searchGoodsList", {
-      method: "POST",
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        "Merchant-Token": merchantToken
-      },
-      body: JSON.stringify({
+  async function request(forceLogin = false) {
+    const merchantToken = await getMerchantToken(forceLogin);
+    const payload = await postLdxp<SearchGoodsData>(
+      "/merchantApi/MyParent/searchGoodsList",
+      {
         current: params.current,
         pageSize: params.pageSize,
         name: "",
         goods_type: goodsType,
         keywords: params.keyword
-      })
-    });
-  } catch {
-    throw new Error("请求 LDXP 失败：请检查网络，或 LDXP 是否仍允许当前页面跨域调用接口。");
+      },
+      merchantToken
+    );
+    if (payload.code !== 1) {
+      if (isAuthExpiredPayload(payload)) {
+        throw new AuthExpiredError();
+      }
+      throw new Error(payload.msg || "LDXP 接口返回错误。");
+    }
+    return payload;
   }
 
-  const payload = (await response.json().catch(() => ({}))) as LdxpResponse<SearchGoodsData>;
-  if (!response.ok) {
-    throw new Error(payload.msg || "请求 LDXP 接口失败，请检查网络、CORS 或 Merchant-Token。");
-  }
-  if (payload.code !== 1) {
-    const message =
-      payload.msg === "请先登录"
-        ? "LDXP 提示请先登录：Token 无效、过期，或粘贴的不是 Merchant-Token。请重新登录后台后复制最新 token。"
-        : payload.msg || "LDXP 接口返回错误。";
-    throw new Error(message);
+  let payload: LdxpResponse<SearchGoodsData>;
+  try {
+    payload = await request(false);
+  } catch (error) {
+    if (!isAuthExpiredError(error)) throw error;
+    payload = await request(true);
   }
 
   const list = Array.isArray(payload.data?.list) ? payload.data.list : [];
@@ -342,8 +391,9 @@ async function fetchSearch(params: SearchParams): Promise<SearchResponse> {
 export default function App() {
   const [initialSearchState] = useState(loadLastSearchState);
   const [keyword, setKeyword] = useState(initialSearchState.keyword);
-  const [token, setToken] = useState(() => window.localStorage.getItem(tokenStorageKey) || "");
-  const [tokenHistory, setTokenHistory] = useState<string[]>(loadTokenHistory);
+  const [credentials, setCredentials] = useState<LoginCredentials>(loadCredentials);
+  const [merchantToken, setMerchantToken] = useState(() => window.localStorage.getItem(tokenStorageKey) || "");
+  const [saveLogin, setSaveLogin] = useState(true);
   const [keywordHistory, setKeywordHistory] = useState<string[]>(loadKeywordHistory);
   const [type, setType] = useState<GoodsType>(initialSearchState.type);
   const [current, setCurrent] = useState(initialSearchState.current);
@@ -353,14 +403,45 @@ export default function App() {
   const [onlyNormal, setOnlyNormal] = useState(initialSearchState.onlyNormal);
   const [minPrice, setMinPrice] = useState(initialSearchState.minPrice);
   const [maxPrice, setMaxPrice] = useState(initialSearchState.maxPrice);
-  const [showToken, setShowToken] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [keywordMenuOpen, setKeywordMenuOpen] = useState(false);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>(() => (window.localStorage.getItem(tokenStorageKey) ? "ready" : "missing"));
+  const [authMessage, setAuthMessage] = useState("");
   const [submitted, setSubmitted] = useState<SearchParams | null>(null);
   const [formError, setFormError] = useState("");
   const [copiedSellerId, setCopiedSellerId] = useState<string | number | null>(null);
 
+  async function ensureMerchantToken(forceLogin = false) {
+    if (!forceLogin && merchantToken) {
+      return merchantToken;
+    }
+
+    setAuthStatus(forceLogin ? "refreshing" : "logging_in");
+    setAuthMessage(forceLogin ? "Token 已过期，正在重新登录..." : "正在登录...");
+
+    try {
+      const nextToken = await loginWithCredentials(credentials);
+      setMerchantToken(nextToken);
+      if (saveLogin) {
+        saveCredentials({ username: credentials.username.trim(), password: credentials.password });
+      } else {
+        window.localStorage.removeItem(loginCredentialsStorageKey);
+      }
+      setAuthStatus("ready");
+      setAuthMessage("已登录");
+      return nextToken;
+    } catch (error) {
+      window.localStorage.removeItem(tokenStorageKey);
+      setMerchantToken("");
+      setAuthStatus("error");
+      setAuthMessage(error instanceof Error ? error.message : "登录失败。");
+      throw error;
+    }
+  }
+
   const query = useQuery({
     queryKey: ["search", submitted],
-    queryFn: () => fetchSearch(submitted as SearchParams),
+    queryFn: () => fetchSearch(submitted as SearchParams, ensureMerchantToken),
     enabled: submitted !== null
   });
 
@@ -579,9 +660,13 @@ export default function App() {
 
   function submitSearch(nextPage = 1) {
     const trimmedKeyword = keyword.trim();
-    const trimmedToken = normalizeMerchantToken(token);
-    if (!trimmedToken) {
-      setFormError("请先填写 Merchant-Token。");
+    const nextCredentials = {
+      username: credentials.username.trim(),
+      password: credentials.password
+    };
+    if (!nextCredentials.username || !nextCredentials.password.trim()) {
+      setFormError("请先填写 LDXP 用户名和密码。");
+      setAuthStatus("missing");
       return;
     }
     if (!trimmedKeyword) {
@@ -591,7 +676,6 @@ export default function App() {
 
     const normalizedPageSize = Math.max(1, Math.floor(Number(pageSize) || 20));
     const normalizedPage = Math.max(1, Math.floor(Number(nextPage) || 1));
-    const nextHistory = [trimmedToken, ...tokenHistory.filter((item) => item !== trimmedToken)].slice(0, maxTokenHistory);
     const nextKeywordHistory = [trimmedKeyword, ...keywordHistory.filter((item) => item !== trimmedKeyword)].slice(0, maxKeywordHistory);
     const searchState: SearchState = {
       keyword: trimmedKeyword,
@@ -604,11 +688,14 @@ export default function App() {
       minPrice,
       maxPrice
     };
-    window.localStorage.setItem(tokenStorageKey, trimmedToken);
-    window.localStorage.setItem(tokenHistoryStorageKey, JSON.stringify(nextHistory));
+    if (saveLogin) {
+      saveCredentials(nextCredentials);
+    } else {
+      window.localStorage.removeItem(loginCredentialsStorageKey);
+    }
     window.localStorage.setItem(keywordHistoryStorageKey, JSON.stringify(nextKeywordHistory));
     window.localStorage.setItem(lastSearchStorageKey, JSON.stringify(searchState));
-    setTokenHistory(nextHistory);
+    setCredentials(nextCredentials);
     setKeywordHistory(nextKeywordHistory);
     setFormError("");
     setCurrent(normalizedPage);
@@ -618,7 +705,7 @@ export default function App() {
       type,
       current: normalizedPage,
       pageSize: normalizedPageSize,
-      token: trimmedToken
+      requestId: Date.now()
     });
   }
 
@@ -644,6 +731,24 @@ export default function App() {
     ? `命中 ${query.data.total} 条，当前第 ${query.data.current}/${query.data.pageCount} 页，展示 ${query.data.count} 条`
     : "等待搜索";
   const activeFilterCount = [onlyNormal, onlyInStock, minPrice !== "", maxPrice !== ""].filter(Boolean).length;
+  const authStatusText: Record<AuthStatus, string> = {
+    missing: "未登录",
+    ready: "已登录",
+    logging_in: "登录中",
+    refreshing: "Token 过期，正在重登",
+    error: "登录失败"
+  };
+  const authBadgeClass =
+    authStatus === "ready"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : authStatus === "error"
+        ? "border-destructive/30 bg-destructive/5 text-destructive"
+        : authStatus === "logging_in" || authStatus === "refreshing"
+          ? "border-amber-200 bg-amber-50 text-amber-700"
+          : "";
+  const visibleKeywordHistory = keyword.trim()
+    ? keywordHistory.filter((item) => item.toLowerCase().includes(keyword.trim().toLowerCase()))
+    : keywordHistory;
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -663,10 +768,14 @@ export default function App() {
               </div>
               <div className="min-w-0">
                 <h1 className="truncate text-base font-semibold tracking-normal">LDXP 货源搜索</h1>
-                <p className="mt-0.5 text-xs text-muted-foreground">分页查询，当前页排序筛选，Token 仅保存在本机。</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">分页查询，自动登录维护 Token，账号密码仅保存在本机。</p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge className={authBadgeClass}>
+                {(authStatus === "logging_in" || authStatus === "refreshing") && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                {authStatusText[authStatus]}
+              </Badge>
               <Badge className="bg-blue-50 text-blue-700">{statusText}</Badge>
               {activeFilterCount > 0 ? (
                 <Badge className="border-amber-200 bg-amber-50 text-amber-700">
@@ -680,87 +789,121 @@ export default function App() {
           </div>
 
           <div className="grid gap-2 rounded-md border border-border bg-background p-2 lg:grid-cols-[minmax(260px,0.9fr)_minmax(360px,1.2fr)_auto] lg:items-end">
-            <div className="grid gap-2 sm:grid-cols-[minmax(180px,1fr)_144px]">
+            <div>
               <label className="block" htmlFor="keyword">
                 <span className="mb-1 block text-xs font-medium text-muted-foreground">商品关键词</span>
-                <div className="relative">
+                <div
+                  className="relative"
+                  onBlur={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                      setKeywordMenuOpen(false);
+                    }
+                  }}
+                >
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     id="keyword"
-                    className="pl-9"
+                    className="pr-10 pl-9"
                     value={keyword}
-                    onChange={(event) => setKeyword(event.target.value)}
+                    onChange={(event) => {
+                      setKeyword(event.target.value);
+                      setKeywordMenuOpen(true);
+                    }}
+                    onFocus={() => setKeywordMenuOpen(true)}
                     placeholder="GPT、Claude、Gemini"
                     autoFocus
+                    autoComplete="off"
+                    aria-expanded={keywordMenuOpen}
+                    aria-controls="keyword-history-list"
                   />
+                  <button
+                    className="absolute right-1 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    type="button"
+                    onClick={() => setKeywordMenuOpen((value) => !value)}
+                    aria-label="展开最近关键词"
+                    title="最近关键词"
+                  >
+                    <ChevronDown className={`h-4 w-4 transition-transform ${keywordMenuOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  {keywordMenuOpen && (
+                    <div
+                      id="keyword-history-list"
+                      className="absolute left-0 right-0 top-[calc(100%+4px)] z-30 max-h-64 overflow-auto rounded-md border border-border bg-background p-1 shadow-xl"
+                    >
+                      {visibleKeywordHistory.length > 0 ? (
+                        visibleKeywordHistory.map((item) => (
+                          <button
+                            key={item}
+                            className="flex h-9 w-full items-center rounded px-3 text-left text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                            type="button"
+                            onClick={() => {
+                              setKeyword(item);
+                              setKeywordMenuOpen(false);
+                            }}
+                          >
+                            <span className="truncate">{item}</span>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-3 py-2 text-sm text-muted-foreground">
+                          {keywordHistory.length > 0 ? "没有匹配的历史关键词" : "暂无历史关键词"}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </label>
-              <label className="block" htmlFor="keyword-history">
-                <span className="mb-1 block text-xs font-medium text-muted-foreground">最近关键词</span>
-                <select
-                  id="keyword-history"
-                  className="h-10 w-full min-w-0 cursor-pointer rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-ring"
-                  value=""
-                  onChange={(event) => {
-                    if (event.target.value) setKeyword(event.target.value);
-                  }}
-                  aria-label="选择历史关键词"
-                >
-                  <option value="">选择历史</option>
-                  {keywordHistory.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
               </label>
             </div>
 
-            <div className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_150px_auto_auto_auto]">
-              <label className="block" htmlFor="merchant-token">
-                <span className="mb-1 block text-xs font-medium text-muted-foreground">Merchant-Token</span>
+            <div className="grid gap-2 md:grid-cols-[minmax(160px,0.9fr)_minmax(180px,1fr)_auto_auto_auto]">
+              <label className="block" htmlFor="ldxp-username">
+                <span className="mb-1 block text-xs font-medium text-muted-foreground">LDXP 用户名</span>
                 <div className="relative">
-                  <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <ShieldCheck className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
-                    id="merchant-token"
+                    id="ldxp-username"
                     className="pl-9"
-                    value={token}
-                    onChange={(event) => setToken(event.target.value)}
-                    placeholder="粘贴 Merchant-Token 或 auth-token JSON"
-                    type={showToken ? "text" : "password"}
-                    autoComplete="off"
+                    value={credentials.username}
+                    onChange={(event) => setCredentials((value) => ({ ...value, username: event.target.value }))}
+                    placeholder="用户名"
+                    autoComplete="username"
                   />
                 </div>
               </label>
-              <label className="block" htmlFor="token-history">
-                <span className="mb-1 block text-xs font-medium text-muted-foreground">历史 Token</span>
-                <select
-                  id="token-history"
-                  className="h-10 w-full min-w-0 cursor-pointer rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-ring"
-                  value=""
-                  onChange={(event) => {
-                    if (event.target.value) setToken(event.target.value);
-                  }}
-                  aria-label="选择历史 Merchant-Token"
-                >
-                  <option value="">历史 Token</option>
-                  {tokenHistory.map((item) => (
-                    <option key={item} value={item}>
-                      {maskToken(item)}
-                    </option>
-                  ))}
-                </select>
+              <label className="block" htmlFor="ldxp-password">
+                <span className="mb-1 block text-xs font-medium text-muted-foreground">LDXP 密码</span>
+                <div className="relative">
+                  <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="ldxp-password"
+                    className="pl-9"
+                    value={credentials.password}
+                    onChange={(event) => setCredentials((value) => ({ ...value, password: event.target.value }))}
+                    placeholder="密码"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="current-password"
+                  />
+                </div>
+              </label>
+              <label className="flex h-10 cursor-pointer items-center gap-2 self-end rounded-md border border-input bg-background px-3 text-sm text-muted-foreground">
+                <input
+                  className="h-4 w-4"
+                  checked={saveLogin}
+                  onChange={(event) => setSaveLogin(event.target.checked)}
+                  type="checkbox"
+                />
+                保存
               </label>
               <Button
                 className="self-end"
                 type="button"
                 variant="outline"
                 size="icon"
-                onClick={() => setShowToken((value) => !value)}
-                aria-label={showToken ? "隐藏 Token" : "显示 Token"}
-                title={showToken ? "隐藏 Token" : "显示 Token"}
+                onClick={() => setShowPassword((value) => !value)}
+                aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                title={showPassword ? "隐藏密码" : "显示密码"}
               >
-                {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
               <Button
                 className="self-end"
@@ -768,30 +911,18 @@ export default function App() {
                 variant="outline"
                 size="icon"
                 onClick={() => {
-                  setToken("");
-                  window.localStorage.removeItem(tokenStorageKey);
+                  clearCredentials();
+                  setCredentials({ username: "", password: "" });
+                  setMerchantToken("");
+                  setAuthStatus("missing");
+                  setAuthMessage("");
                 }}
-                aria-label="清空当前 Token"
-                title="清空当前 Token"
+                aria-label="清空登录凭据"
+                title="清空登录凭据"
               >
                 <X className="h-4 w-4" />
               </Button>
-              <Button
-                className="self-end"
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() => {
-                  setTokenHistory([]);
-                  window.localStorage.removeItem(tokenHistoryStorageKey);
-                  window.localStorage.removeItem(tokenStorageKey);
-                  setToken("");
-                }}
-                aria-label="清空 Token 历史"
-                title="清空 Token 历史"
-              >
-                <History className="h-4 w-4" />
-              </Button>
+              {authMessage && <div className="text-xs text-muted-foreground md:col-span-5">{authMessage}</div>}
             </div>
 
             <Button className="h-10 lg:self-end" type="submit" disabled={query.isFetching}>
@@ -930,7 +1061,7 @@ export default function App() {
         )}
 
         {!submitted ? (
-          <EmptyState title="填写 Token 和关键词后搜索" description="不会自动请求；点击搜索按钮或在输入框按回车触发。" />
+          <EmptyState title="填写账号密码和关键词后搜索" description="不会自动请求；点击搜索按钮或在输入框按回车触发。" />
         ) : !query.isFetching && !query.error && rows.length === 0 ? (
           <EmptyState title="当前页没有商品" description="换一个关键词、类型，或调整页码和每页数量。" />
         ) : (

@@ -1,14 +1,16 @@
 # LDXP 货源分页搜索
 
-一个纯前端的 LDXP 货源商品分页搜索工具。页面直接调用 LDXP 接口，支持分页搜索、当前页排序筛选、Token 本地缓存、最近关键词和商品表格查看。
+一个纯前端的 LDXP 货源商品分页搜索工具。页面使用你填写的 LDXP 用户名和密码自动登录，获取并维护 `Merchant-Token`，支持分页搜索、当前页排序筛选、最近关键词和商品表格查看。
 
 > 本项目不是 LDXP 官方项目，也不隶属于 LDXP。请只在你有权限的账号和数据范围内使用。
 
 ## 功能
 
+- 使用账号密码自动登录并维护 `Merchant-Token`。
+- Token 过期时自动重新登录一次，并重试当前搜索。
 - 搜索公开货源商品。
 - 使用接口分页，不默认扫描全量数据。
-- 页面填写 `Merchant-Token`，历史 Token 缓存到 `localStorage`。
+- 账号密码按本地自用模式明文缓存到 `localStorage`。
 - 商品关键词会记录最近 20 次，方便快速复用。
 - 支持商品类型筛选：全部、卡密、知识、资源、权益。
 - 支持当前页排序：售价、成本价、代理价、库存。
@@ -71,35 +73,32 @@ http://127.0.0.1:4173
 
 ## 如何使用
 
-1. 打开 LDXP 商家后台并确保账号已登录。
-2. 获取可用的 `Merchant-Token`。
-3. 在页面的 `Merchant-Token` 输入框粘贴 Token。
-4. 输入商品关键词，例如 `GPT`、`Claude`、`Gemini`。
-5. 选择商品类型、页码、每页数量。
-6. 点击“搜索”，或在输入框中按回车。
+1. 在页面填写 LDXP 用户名和密码。
+2. 按需勾选“保存”，账号密码会明文保存到当前浏览器 `localStorage`。
+3. 输入商品关键词，例如 `GPT`、`Claude`、`Gemini`。
+4. 选择商品类型、页码、每页数量。
+5. 点击“搜索”，或在输入框中按回车。
 
-Token 输入框支持这些格式：
-
-```text
-纯 Merchant-Token
-Merchant-Token: xxx
-{"value":"xxx","expiry":...}
-{"merchant_token":"xxx"}
-{"token":"xxx"}
-Bearer xxx
-```
+首次搜索时页面会自动调用登录接口获取 `Merchant-Token`。如果后续搜索提示 Token 过期，页面会自动重新登录一次并重试当前搜索。
 
 ## 接口说明
 
-页面直接请求 LDXP：
+登录链路：
+
+```http
+POST https://pay.ldxp.cn/merchantApi/user/checkSafeMode
+POST https://pay.ldxp.cn/merchantApi/user/login
+```
+
+搜索链路：
 
 ```http
 POST https://pay.ldxp.cn/merchantApi/MyParent/searchGoodsList
-Merchant-Token: <Merchant-Token>
+Merchant-Token: <自动登录得到的 Merchant-Token>
 Content-Type: application/json
 ```
 
-请求体：
+搜索请求体：
 
 ```json
 {
@@ -135,9 +134,11 @@ npm run check
 ## 注意事项
 
 - 这是纯前端静态网页，不再包含本地 Express 后端代理。
+- 当前自动登录只支持 `safe_mode=0` 的账号；二级密码、邮箱验证码、扫码登录暂不支持。
+- 账号密码会明文缓存在浏览器 `localStorage`，仅适合本地自用。
+- 不要把本工具部署到公网静态站给多人使用。
 - 排序和筛选只作用于当前页，不会扫描全量商品。
 - 当前工具只读，不会调用对接、取消对接、克隆店铺等写接口。
-- Token 会缓存在浏览器 `localStorage`，仅适合本地自用。
-- 不要提交 `.env`、真实 Token、Cookie 或含有敏感信息的截图。
+- 不要提交 `.env`、真实账号密码、Token、Cookie 或含有敏感信息的截图。
 - 不建议直接双击 `index.html` 使用，优先通过 `npm run preview` 或静态 HTTP 服务访问。
 - 如果 LDXP 以后调整 CORS 策略，直连接口可能失效，届时需要恢复本地代理或改成浏览器插件/油猴脚本方案。

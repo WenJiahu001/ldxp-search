@@ -20,18 +20,22 @@
 
 当前核心链路：
 
-1. 用户在页面输入关键词、Token、页码、每页数量。
-2. 前端直接请求 `https://pay.ldxp.cn/merchantApi/MyParent/searchGoodsList`。
-3. Token 通过 `Merchant-Token` 请求头传递，不放入 URL。
-4. 前端用 `normalizeGoods` 瘦身响应，移除超长 `description` 等页面不用的字段。
-5. 前端展示当前页结果，并在当前页内排序/筛选。
+1. 用户在页面输入关键词、LDXP 用户名、密码、页码、每页数量。
+2. 前端用 `/merchantApi/user/checkSafeMode` 检查安全模式。
+3. `safe_mode=0` 时调用 `/merchantApi/user/login`，读取 `data.merchant_token`。
+4. 前端请求 `https://pay.ldxp.cn/merchantApi/MyParent/searchGoodsList`。
+5. Token 通过 `Merchant-Token` 请求头传递，不放入 URL。
+6. 如果搜索提示 Token 过期，前端自动登录一次并重试原搜索。
+7. 前端用 `normalizeGoods` 瘦身响应，移除超长 `description` 等页面不用的字段。
+8. 前端展示当前页结果，并在当前页内排序/筛选。
 
 ## 重要约束
 
-- 不要把 Token 放到 URL 查询参数里。
-- 不要在日志中打印 Token。
-- 不要提交 `.env`、真实 Token、Cookie 或含敏感信息的截图。
+- 不要把 Token、账号或密码放到 URL 查询参数里。
+- 不要在日志中打印账号、密码、Token、Cookie 或接口完整凭据。
+- 不要提交 `.env`、真实账号密码、Token、Cookie 或含敏感信息的截图。
 - 不要读取浏览器本地配置、密码、Cookie 或会话文件。
+- 当前自动登录只支持 `safe_mode=0`；不要保存二级密码，不要自动处理邮箱验证码或扫码登录。
 - 不要恢复后端代理，除非用户明确要求或 LDXP CORS 策略导致纯前端失效。
 - 不要调用写接口，例如：
   - `/merchantApi/MyParent/connectGoods`
@@ -42,6 +46,29 @@
 - 默认不要做跨页/全量扫描。当前排序和筛选只作用于当前页。
 
 ## 接口事实
+
+登录链路：
+
+```json
+{
+  "username": "账号",
+  "password": "密码"
+}
+```
+
+先请求：
+
+```text
+POST /merchantApi/user/checkSafeMode
+```
+
+仅当 `data.safe_mode` 为 `0` 时再请求：
+
+```text
+POST /merchantApi/user/login
+```
+
+登录成功响应包含 `data.merchant_token`。
 
 `searchGoodsList` 支持分页：
 
@@ -75,8 +102,8 @@
 
 ## 本地存储
 
-- `ldxp-merchant-token`：当前 Token。
-- `ldxp-merchant-token-history`：历史 Token，最多 8 个。
+- `ldxp-login-credentials`：LDXP 用户名和密码，明文保存，仅适合本机自用。
+- `ldxp-merchant-token`：自动登录得到的当前 Token。
 - `ldxp-keyword-history`：最近商品关键词，最多 20 个。
 - `ldxp-last-search-state`：上一次搜索条件、页码、每页数量、排序筛选。
 
