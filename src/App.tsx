@@ -36,6 +36,8 @@ const loginCredentialsStorageKey = "ldxp-login-credentials";
 const lastSearchStorageKey = "ldxp-last-search-state";
 const keywordHistoryStorageKey = "ldxp-keyword-history";
 const maxKeywordHistory = 20;
+// pay.ldxp.cn 会重定向，浏览器无法跟随 CORS 预检重定向，因此直连最终接口域名。
+const ldxpApiBaseUrl = "https://wzyp.cn";
 
 const goodsTypes: Array<{ value: GoodsType; label: string }> = [
   { value: "all", label: "全部" },
@@ -248,7 +250,7 @@ function isAuthExpiredError(error: unknown) {
 async function postLdxp<T>(path: string, body: Record<string, unknown> = {}, merchantToken?: string): Promise<LdxpResponse<T>> {
   let response: Response;
   try {
-    response = await fetch(`https://pay.ldxp.cn${path}`, {
+    response = await fetch(`${ldxpApiBaseUrl}${path}`, {
       method: "POST",
       headers: {
         Accept: "application/json, text/plain, */*",
@@ -258,7 +260,7 @@ async function postLdxp<T>(path: string, body: Record<string, unknown> = {}, mer
       body: JSON.stringify(body)
     });
   } catch {
-    throw new Error("请求 LDXP 失败：请检查网络，或 LDXP 是否仍允许当前页面跨域调用接口。");
+    throw new Error("无法连接 LDXP 接口：请检查网络，或 wzyp.cn 的跨域策略是否已变更。");
   }
 
   const payload = (await response.json().catch(() => ({}))) as LdxpResponse<T>;
@@ -266,7 +268,7 @@ async function postLdxp<T>(path: string, body: Record<string, unknown> = {}, mer
     if (response.status === 401 || isAuthExpiredPayload(payload)) {
       throw new AuthExpiredError();
     }
-    throw new Error(payload.msg || "请求 LDXP 接口失败，请检查网络或 CORS。");
+    throw new Error(payload.msg || "LDXP 接口请求失败：请检查网络或 wzyp.cn 的跨域策略。");
   }
   return payload;
 }
@@ -714,6 +716,13 @@ export default function App() {
     submitSearch(1);
   }
 
+  function handleDeleteHistoryItem(itemToRemove: string, event: React.MouseEvent) {
+    event.stopPropagation();
+    const nextKeywordHistory = keywordHistory.filter((item) => item !== itemToRemove);
+    window.localStorage.setItem(keywordHistoryStorageKey, JSON.stringify(nextKeywordHistory));
+    setKeywordHistory(nextKeywordHistory);
+  }
+
   async function copySellerContact(goods: LdxpGoods) {
     const text = userContactText(goods);
     if (!text) return;
@@ -746,9 +755,7 @@ export default function App() {
         : authStatus === "logging_in" || authStatus === "refreshing"
           ? "border-amber-200 bg-amber-50 text-amber-700"
           : "";
-  const visibleKeywordHistory = keyword.trim()
-    ? keywordHistory.filter((item) => item.toLowerCase().includes(keyword.trim().toLowerCase()))
-    : keywordHistory;
+  const visibleKeywordHistory = keywordHistory;
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -803,7 +810,7 @@ export default function App() {
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     id="keyword"
-                    className="pr-10 pl-9"
+                    className={keyword ? "pr-16 pl-9" : "pr-10 pl-9"}
                     value={keyword}
                     onChange={(event) => {
                       setKeyword(event.target.value);
@@ -816,6 +823,20 @@ export default function App() {
                     aria-expanded={keywordMenuOpen}
                     aria-controls="keyword-history-list"
                   />
+                  {keyword && (
+                    <button
+                      className="absolute right-9 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      type="button"
+                      onClick={() => {
+                        setKeyword("");
+                        setKeywordMenuOpen(true);
+                      }}
+                      aria-label="清除商品关键词"
+                      title="清除关键词"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
                   <button
                     className="absolute right-1 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     type="button"
@@ -832,22 +853,33 @@ export default function App() {
                     >
                       {visibleKeywordHistory.length > 0 ? (
                         visibleKeywordHistory.map((item) => (
-                          <button
+                          <div
                             key={item}
-                            className="flex h-9 w-full items-center rounded px-3 text-left text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
-                            type="button"
-                            onClick={() => {
-                              setKeyword(item);
-                              setKeywordMenuOpen(false);
-                            }}
+                            className="group flex h-9 w-full items-center justify-between rounded text-sm transition-colors hover:bg-muted"
                           >
-                            <span className="truncate">{item}</span>
-                          </button>
+                            <button
+                              className="flex h-full min-w-0 flex-1 items-center px-3 text-left focus-visible:outline-none"
+                              type="button"
+                              onClick={() => {
+                                setKeyword(item);
+                                setKeywordMenuOpen(false);
+                              }}
+                            >
+                              <span className="truncate">{item}</span>
+                            </button>
+                            <button
+                              className="mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background hover:text-destructive focus-visible:outline-none"
+                              type="button"
+                              onClick={(event) => handleDeleteHistoryItem(item, event)}
+                              aria-label={`删除历史关键词 ${item}`}
+                              title="删除此记录"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         ))
                       ) : (
-                        <div className="px-3 py-2 text-sm text-muted-foreground">
-                          {keywordHistory.length > 0 ? "没有匹配的历史关键词" : "暂无历史关键词"}
-                        </div>
+                        <div className="px-3 py-2 text-sm text-muted-foreground">暂无历史关键词</div>
                       )}
                     </div>
                   )}

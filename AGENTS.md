@@ -23,7 +23,7 @@
 1. 用户在页面输入关键词、LDXP 用户名、密码、页码、每页数量。
 2. 前端用 `/merchantApi/user/checkSafeMode` 检查安全模式。
 3. `safe_mode=0` 时调用 `/merchantApi/user/login`，读取 `data.merchant_token`。
-4. 前端请求 `https://pay.ldxp.cn/merchantApi/MyParent/searchGoodsList`。
+4. 前端请求 `https://wzyp.cn/merchantApi/MyParent/searchGoodsList`。
 5. Token 通过 `Merchant-Token` 请求头传递，不放入 URL。
 6. 如果搜索提示 Token 过期，前端自动登录一次并重试原搜索。
 7. 前端用 `normalizeGoods` 瘦身响应，移除超长 `description` 等页面不用的字段。
@@ -36,7 +36,8 @@
 - 不要提交 `.env`、真实账号密码、Token、Cookie 或含敏感信息的截图。
 - 不要读取浏览器本地配置、密码、Cookie 或会话文件。
 - 当前自动登录只支持 `safe_mode=0`；不要保存二级密码，不要自动处理邮箱验证码或扫码登录。
-- 不要恢复后端代理，除非用户明确要求或 LDXP CORS 策略导致纯前端失效。
+- `pay.ldxp.cn` 会 301 跳转到 `wzyp.cn`；浏览器无法跟随 CORS 预检跳转，所以纯前端必须使用 `https://wzyp.cn` 作为接口基地址。
+- 不要恢复后端代理，除非用户明确要求或 `wzyp.cn` 的 CORS 策略导致纯前端失效。
 - 不要调用写接口，例如：
   - `/merchantApi/MyParent/connectGoods`
   - `/merchantApi/MyParent/disconnectGoods`

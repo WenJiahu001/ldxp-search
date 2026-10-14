@@ -86,14 +86,14 @@ http://127.0.0.1:4173
 登录链路：
 
 ```http
-POST https://pay.ldxp.cn/merchantApi/user/checkSafeMode
-POST https://pay.ldxp.cn/merchantApi/user/login
+POST https://wzyp.cn/merchantApi/user/checkSafeMode
+POST https://wzyp.cn/merchantApi/user/login
 ```
 
 搜索链路：
 
 ```http
-POST https://pay.ldxp.cn/merchantApi/MyParent/searchGoodsList
+POST https://wzyp.cn/merchantApi/MyParent/searchGoodsList
 Merchant-Token: <自动登录得到的 Merchant-Token>
 Content-Type: application/json
 ```
@@ -141,4 +141,5 @@ npm run check
 - 当前工具只读，不会调用对接、取消对接、克隆店铺等写接口。
 - 不要提交 `.env`、真实账号密码、Token、Cookie 或含有敏感信息的截图。
 - 不建议直接双击 `index.html` 使用，优先通过 `npm run preview` 或静态 HTTP 服务访问。
-- 如果 LDXP 以后调整 CORS 策略，直连接口可能失效，届时需要恢复本地代理或改成浏览器插件/油猴脚本方案。
+- 接口请求使用 `https://wzyp.cn`。原 `pay.ldxp.cn` 会返回 301 跳转，而浏览器不会跟随 CORS 预检跳转，因此不能直接作为纯前端请求地址。
+- 如果 `wzyp.cn` 以后调整 CORS 策略，直连接口可能失效，届时需要恢复本地代理或改成浏览器插件/油猴脚本方案。
