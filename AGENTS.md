@@ -22,6 +22,7 @@
 - Vite 配置：`vite.config.ts`
 - 开源说明：`README.md`、`CONTRIBUTING.md`、`SECURITY.md`、`LICENSE`
 - CI：`.github/workflows/ci.yml`
+- 审计报告：`scripts/audit-report.mjs`；运行依赖严格阻断，完整构建依赖报告不因漏洞退出码 1 阻断，但执行或网络异常必须失败。
 
 当前核心链路：
 
@@ -148,6 +149,8 @@ npm run check
 - 新增功能时同步更新 README；改变安全边界时同步更新 SECURITY。
 - 不要添加真实仓库地址占位、个人 Token、账号信息或不可复现的本地路径。
 - CI 使用 Node 22 和 npm ci；改依赖后必须提交更新后的 `package-lock.json`。
+- CI 固定 Ubuntu 24.04；checkout/setup-node 使用 v5，Action 自身运行在 Node 24，与项目 Node 22 分开配置。
+- Vite、React 编译插件、Tailwind 动画插件放在 devDependencies。`npm run audit:runtime` 严格检查运行依赖；全量漏洞必须通过 `npm run audit:report` 在日志和 Summary 保留，不能声称全量零漏洞。
 - 当前许可证为 MIT。
 
 ## UI 维护原则

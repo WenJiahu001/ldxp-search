@@ -128,6 +128,8 @@ npm test
 npm run build
 npm run preview
 npm run check
+npm run audit:runtime
+npm run audit:report
 ```
 
 `npm run check` 会依次执行类型检查和生产构建。`npm test` 使用 Node 内置测试工具和现有 TypeScript 编译器运行回归测试，接口均为模拟响应，不会访问真实账号。
@@ -137,7 +139,8 @@ npm run check
 - 许可证：MIT，见 `LICENSE`。
 - 贡献说明：见 `CONTRIBUTING.md`。
 - 安全说明：见 `SECURITY.md`。
-- CI：GitHub Actions 会执行 `npm ci`、`npm audit --audit-level=high`、`npm test` 和 `npm run check`。
+- CI：GitHub Actions 使用 Ubuntu 24.04、Node 22 和 Node 24 运行时的 checkout/setup-node v5，执行 `npm ci`、`npm test`、`npm run check`，严格阻断运行依赖的高危漏洞。
+- 完整依赖审计保留在日志及 Actions Summary；构建依赖的漏洞仅报告，不阻断 CI，网络或审计执行异常仍会失败。详情见 `SECURITY.md`。
 
 ## 注意事项
 
