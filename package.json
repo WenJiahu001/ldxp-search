@@ -13,6 +13,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
+    "test": "node --import ./tests/register.mjs --test tests/*.test.mjs",
     "check": "npm run typecheck && npm run build"
   },
   "keywords": [

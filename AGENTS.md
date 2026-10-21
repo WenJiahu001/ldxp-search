@@ -13,6 +13,11 @@
 - 前端入口：`src/main.tsx`
 - 主页面：`src/App.tsx`
 - 类型定义：`src/types.ts`
+- 认证会话：`src/lib/auth.ts`，负责账号隔离、登录合并、取消与持久化。
+- 接口请求：`src/lib/api.ts`，统一域名、20 秒超时、取消、错误处理与一次重登。
+- 商品校验与价格：`src/lib/goods.ts`；存储入口：`src/lib/storage.ts`；搜索设置：`src/lib/searchState.ts`。
+- 大页渲染：`src/components/result-rows.tsx`，使用 IntersectionObserver 按组挂载，并保留离屏高度。
+- 回归测试：`tests/*.test.mjs`，使用 Node 内置测试和已有 TypeScript 编译器，不添加测试依赖。
 - UI 基础组件：`src/components/ui/*`
 - Vite 配置：`vite.config.ts`
 - 开源说明：`README.md`、`CONTRIBUTING.md`、`SECURITY.md`、`LICENSE`
@@ -104,9 +109,12 @@ POST /merchantApi/user/login
 ## 本地存储
 
 - `ldxp-login-credentials`：LDXP 用户名和密码，明文保存，仅适合本机自用。
-- `ldxp-merchant-token`：自动登录得到的当前 Token。
+- `ldxp-merchant-token`：`{ username, token }`，只允许绑定账号使用；旧版裸 Token 不复用。
+- `ldxp-save-login`：保存凭据偏好，关闭时立即移除持久化凭据和 Token。
 - `ldxp-keyword-history`：最近商品关键词，最多 20 个。
 - `ldxp-last-search-state`：上一次搜索条件、页码、每页数量、排序筛选。
+
+统一通过 storage 访问存储；浏览器禁用存储时降级到内存。修改凭据时取消旧请求、清除旧会话和搜索缓存，旧登录响应禁止回写。搜索禁用自动重试及断网重连自动查询，每次查询最多重登一次。不把凭据放入查询缓存键。排序和筛选设置统一写入 last-search-state，不再维护独立 sort-key。
 
 ## 开发命令
 
@@ -114,6 +122,7 @@ POST /merchantApi/user/login
 npm install
 npm run dev
 npm run typecheck
+npm test
 npm run build
 npm run check
 npm run preview
@@ -147,11 +156,12 @@ npm run check
 - 不要让顶部区域固定遮挡商品列表。
 - 表格允许横向滚动，页面本身自然纵向滚动。
 - 每页数量由用户控制，但前端响应仍应瘦身，避免长 HTML 描述拖慢页面。
+- 分页入口在空结果时仍可见；页码回车或按钮提交，修改每页数量后从第 1 页查起。翻页使用已提交的关键词和类型。
+- 成本价区间须合法；缺失价格不等于免费，升序和降序均放最后。商品响应字段必须做运行时校验。
 - 图标使用 `lucide-react`，不要用 emoji 做功能图标。
 
 ## 后续可选优化
 
 - 做“深度扫描前 N 页并排序”的独立按钮，但必须明确提示会增加请求量。
 - 增加导出当前页 CSV。
-- 增加复制联系方式按钮。
 - 增加商品详情抽屉，但不要默认拉取长描述。

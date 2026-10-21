@@ -15,6 +15,9 @@
 - 支持商品类型筛选：全部、卡密、知识、资源、权益。
 - 支持当前页排序：售价、成本价、代理价、库存。
 - 支持当前页筛选：价格区间、正常上架、有库存。
+- 价格区间针对成本价，缺失价格在升序和降序中都排在末尾。
+- 支持输入页码后回车跳页；修改每页数量后点击“跳转 / 应用”，从第 1 页查询。
+- 大页商品按可见区域分组挂载，翻页加载时保留上一页结果。
 - 展示商家头像、店铺链接、昵称、QQ、手机/群和微信/其他联系方式。
 - 前端会瘦身接口响应，只保留页面展示需要的字段。
 
@@ -81,6 +84,10 @@ http://127.0.0.1:4173
 
 首次搜索时页面会自动调用登录接口获取 `Merchant-Token`。如果后续搜索提示 Token 过期，页面会自动重新登录一次并重试当前搜索。
 
+Token 与登录账号绑定，修改用户名或密码会取消旧请求并清除旧会话及结果。旧版未绑定账号的 Token 会被丢弃，下次查询自动登录。取消“保存”会立即移除本地账号密码和 Token，当前会话仍可在内存中使用；偏好会在刷新后保留。本地存储不可用时，页面会提示并退回内存保存。
+
+每个接口请求最多等待 20 秒；认证或业务错误不会自动循环重试。空结果和筛选无匹配时仍保留分页入口。
+
 ## 接口说明
 
 登录链路：
@@ -117,19 +124,20 @@ Content-Type: application/json
 ```bash
 npm run dev
 npm run typecheck
+npm test
 npm run build
 npm run preview
 npm run check
 ```
 
-`npm run check` 会依次执行类型检查和生产构建，适合作为提交前检查。
+`npm run check` 会依次执行类型检查和生产构建。`npm test` 使用 Node 内置测试工具和现有 TypeScript 编译器运行回归测试，接口均为模拟响应，不会访问真实账号。
 
 ## 开源与贡献
 
 - 许可证：MIT，见 `LICENSE`。
 - 贡献说明：见 `CONTRIBUTING.md`。
 - 安全说明：见 `SECURITY.md`。
-- CI：GitHub Actions 会执行 `npm ci`、`npm audit --audit-level=high`、`npm run typecheck` 和 `npm run build`。
+- CI：GitHub Actions 会执行 `npm ci`、`npm audit --audit-level=high`、`npm test` 和 `npm run check`。
 
 ## 注意事项
 

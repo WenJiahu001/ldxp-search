@@ -1,5 +1,5 @@
-import { FormEvent, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { FormEvent, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ColumnDef,
   flexRender,
@@ -29,15 +29,14 @@ import {
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
-import type { GoodsType, LdxpGoods, SearchResponse } from "./types";
+import { ResultRows } from "./components/result-rows";
+import type { GoodsType, LdxpGoods } from "./types";
 
-const tokenStorageKey = "ldxp-merchant-token";
-const loginCredentialsStorageKey = "ldxp-login-credentials";
-const lastSearchStorageKey = "ldxp-last-search-state";
-const keywordHistoryStorageKey = "ldxp-keyword-history";
-const maxKeywordHistory = 20;
-// pay.ldxp.cn 会重定向，浏览器无法跟随 CORS 预检重定向，因此直连最终接口域名。
-const ldxpApiBaseUrl = "https://wzyp.cn";
+import { fetchSearch, type SearchParams, type LoginCredentials } from "./lib/api";
+import { AuthSession, loadCredentials, loadSaveLogin, type AuthStatus } from "./lib/auth";
+import { storage } from "./lib/storage";
+import { comparePrices, formatPrice, priceValue } from "./lib/goods";
+import { loadLastSearchState, loadKeywordHistory, lastSearchStorageKey, keywordHistoryStorageKey, maxKeywordHistory, positiveInteger, type SearchState, type SortKey } from "./lib/searchState";
 
 const goodsTypes: Array<{ value: GoodsType; label: string }> = [
   { value: "all", label: "全部" },
@@ -54,163 +53,7 @@ const typeLabel: Record<string, string> = {
   equity: "权益"
 };
 
-interface SearchParams {
-  keyword: string;
-  type: GoodsType;
-  current: number;
-  pageSize: number;
-  requestId: number;
-}
-
-type LdxpGoodsType = "" | "card" | "article" | "resource" | "equity";
-type AuthStatus = "missing" | "ready" | "logging_in" | "refreshing" | "error";
-
-interface LdxpResponse<T> {
-  code: number;
-  msg?: string;
-  data?: T;
-}
-
-interface LoginCredentials {
-  username: string;
-  password: string;
-}
-
-interface LoginData {
-  merchant_token?: string;
-}
-
-interface SafeModeData {
-  safe_mode?: number | string;
-}
-
-interface SearchGoodsData {
-  list?: unknown[];
-  total?: number;
-}
-
-type SortKey =
-  | "default"
-  | "cost_asc"
-  | "cost_desc"
-  | "price_asc"
-  | "price_desc"
-  | "agent1_asc"
-  | "agent2_asc"
-  | "agent3_asc"
-  | "stock_desc";
-
-interface SearchState {
-  keyword: string;
-  type: GoodsType;
-  current: number;
-  pageSize: number;
-  sortKey: SortKey;
-  onlyInStock: boolean;
-  onlyNormal: boolean;
-  minPrice: string;
-  maxPrice: string;
-}
-
-const defaultSearchState: SearchState = {
-  keyword: "",
-  type: "card",
-  current: 1,
-  pageSize: 20,
-  sortKey: "default",
-  onlyInStock: false,
-  onlyNormal: false,
-  minPrice: "",
-  maxPrice: ""
-};
-
-function isGoodsType(value: unknown): value is GoodsType {
-  return value === "all" || value === "card" || value === "article" || value === "resource" || value === "equity";
-}
-
-function isSortKey(value: unknown): value is SortKey {
-  return (
-    value === "default" ||
-    value === "cost_asc" ||
-    value === "cost_desc" ||
-    value === "price_asc" ||
-    value === "price_desc" ||
-    value === "agent1_asc" ||
-    value === "agent2_asc" ||
-    value === "agent3_asc" ||
-    value === "stock_desc"
-  );
-}
-
-function normalizeSearchState(value: Partial<SearchState> | null | undefined): SearchState {
-  return {
-    keyword: typeof value?.keyword === "string" ? value.keyword : defaultSearchState.keyword,
-    type: isGoodsType(value?.type) ? value.type : defaultSearchState.type,
-    current: Math.max(1, Math.floor(Number(value?.current || defaultSearchState.current))),
-    pageSize: Math.max(1, Math.floor(Number(value?.pageSize || defaultSearchState.pageSize))),
-    sortKey: isSortKey(value?.sortKey) ? value.sortKey : defaultSearchState.sortKey,
-    onlyInStock: Boolean(value?.onlyInStock),
-    onlyNormal: Boolean(value?.onlyNormal),
-    minPrice: typeof value?.minPrice === "string" ? value.minPrice : defaultSearchState.minPrice,
-    maxPrice: typeof value?.maxPrice === "string" ? value.maxPrice : defaultSearchState.maxPrice
-  };
-}
-
-function loadLastSearchState() {
-  try {
-    return normalizeSearchState(JSON.parse(window.localStorage.getItem(lastSearchStorageKey) || "null"));
-  } catch {
-    return defaultSearchState;
-  }
-}
-
-function loadKeywordHistory() {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(keywordHistoryStorageKey) || "[]");
-    return Array.isArray(parsed)
-      ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, maxKeywordHistory)
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function loadCredentials(): LoginCredentials {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(loginCredentialsStorageKey) || "null") as Partial<LoginCredentials> | null;
-    return {
-      username: typeof parsed?.username === "string" ? parsed.username : "",
-      password: typeof parsed?.password === "string" ? parsed.password : ""
-    };
-  } catch {
-    return { username: "", password: "" };
-  }
-}
-
-function saveCredentials(credentials: LoginCredentials) {
-  window.localStorage.setItem(loginCredentialsStorageKey, JSON.stringify(credentials));
-}
-
-function clearCredentials() {
-  window.localStorage.removeItem(loginCredentialsStorageKey);
-  window.localStorage.removeItem(tokenStorageKey);
-}
-
-function formatPrice(value: unknown) {
-  if (value === undefined || value === null || value === "") return "-";
-  if (Number(value) === 0) return "免费";
-  return `${value}元`;
-}
-
-function numericValue(value: unknown) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
-}
-
-function stockValue(value: unknown) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
+function stockValue(value: unknown) { return priceValue(value) ?? 0; }
 
 function userContactItems(goods: LdxpGoods) {
   const user = goods.user;
@@ -231,171 +74,15 @@ function userContactText(goods: LdxpGoods) {
   return parts.filter(Boolean).join("\n");
 }
 
-class AuthExpiredError extends Error {
-  constructor(message = "Token 已失效，请重新登录。") {
-    super(message);
-    this.name = "AuthExpiredError";
-  }
-}
-
-function isAuthExpiredPayload(payload: Pick<LdxpResponse<unknown>, "code" | "msg"> | null | undefined) {
-  const message = String(payload?.msg || "");
-  return payload?.code === 401 || message.includes("请先登录") || message.toLowerCase().includes("token");
-}
-
-function isAuthExpiredError(error: unknown) {
-  return error instanceof AuthExpiredError;
-}
-
-async function postLdxp<T>(path: string, body: Record<string, unknown> = {}, merchantToken?: string): Promise<LdxpResponse<T>> {
-  let response: Response;
-  try {
-    response = await fetch(`${ldxpApiBaseUrl}${path}`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        ...(merchantToken ? { "Merchant-Token": merchantToken } : {})
-      },
-      body: JSON.stringify(body)
-    });
-  } catch {
-    throw new Error("无法连接 LDXP 接口：请检查网络，或 wzyp.cn 的跨域策略是否已变更。");
-  }
-
-  const payload = (await response.json().catch(() => ({}))) as LdxpResponse<T>;
-  if (!response.ok) {
-    if (response.status === 401 || isAuthExpiredPayload(payload)) {
-      throw new AuthExpiredError();
-    }
-    throw new Error(payload.msg || "LDXP 接口请求失败：请检查网络或 wzyp.cn 的跨域策略。");
-  }
-  return payload;
-}
-
-async function loginWithCredentials(credentials: LoginCredentials): Promise<string> {
-  const username = credentials.username.trim();
-  const password = credentials.password;
-  if (!username || !password.trim()) {
-    throw new Error("请先填写 LDXP 用户名和密码。");
-  }
-
-  const loginBody = { username, password };
-  const safePayload = await postLdxp<SafeModeData>("/merchantApi/user/checkSafeMode", loginBody);
-  if (safePayload.code !== 1) {
-    throw new Error(safePayload.msg || "安全验证检查失败。");
-  }
-  if (Number(safePayload.data?.safe_mode || 0) !== 0) {
-    throw new Error("该账号开启了二级密码或邮箱验证，当前工具暂不支持自动登录。");
-  }
-
-  const loginPayload = await postLdxp<LoginData>("/merchantApi/user/login", loginBody);
-  if (loginPayload.code !== 1 || !loginPayload.data?.merchant_token) {
-    throw new Error(loginPayload.msg || "登录失败，未获取到 Merchant-Token。");
-  }
-
-  window.localStorage.setItem(tokenStorageKey, loginPayload.data.merchant_token);
-  return loginPayload.data.merchant_token;
-}
-
-function normalizeGoods(item: unknown): LdxpGoods {
-  const goods = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
-  const user = (goods.user && typeof goods.user === "object" ? goods.user : {}) as Record<string, unknown>;
-  const category = (goods.category && typeof goods.category === "object" ? goods.category : {}) as Record<string, unknown>;
-  const child = goods.child && typeof goods.child === "object" ? (goods.child as Record<string, unknown>) : null;
-
-  return {
-    id: (goods.id as number | string | undefined) ?? "",
-    name: goods.name as string | undefined,
-    image: goods.image as string | undefined,
-    link: goods.link as string | undefined,
-    goods_type: goods.goods_type as string | undefined,
-    price: goods.price as number | string | undefined,
-    agent_price_limit: goods.agent_price_limit as number | string | undefined,
-    agent_price1: goods.agent_price1 as number | string | undefined,
-    agent_price2: goods.agent_price2 as number | string | undefined,
-    agent_price3: goods.agent_price3 as number | string | undefined,
-    cost_price: goods.cost_price as number | string | undefined,
-    status: goods.status as number | undefined,
-    stock_count: goods.stock_count as number | undefined,
-    category: {
-      name: category.name as string | undefined
-    },
-    user: {
-      link: user.link as string | undefined,
-      nickname: user.nickname as string | undefined,
-      avatar: user.avatar as string | undefined,
-      contact_qq: user.contact_qq as string | undefined,
-      contact_mobile: user.contact_mobile as string | undefined,
-      contact_wechat: user.contact_wechat as string | undefined
-    },
-    child: child
-      ? {
-          link: child.link as string | undefined,
-          price: child.price as number | string | undefined,
-          add_type: child.add_type as number | undefined,
-          add_rate: child.add_rate as number | string | undefined,
-          add_price: child.add_price as number | string | undefined
-        }
-      : null
-  };
-}
-
-async function fetchSearch(params: SearchParams, getMerchantToken: (forceLogin?: boolean) => Promise<string>): Promise<SearchResponse> {
-  const goodsType = (params.type === "all" ? "" : params.type) as LdxpGoodsType;
-
-  async function request(forceLogin = false) {
-    const merchantToken = await getMerchantToken(forceLogin);
-    const payload = await postLdxp<SearchGoodsData>(
-      "/merchantApi/MyParent/searchGoodsList",
-      {
-        current: params.current,
-        pageSize: params.pageSize,
-        name: "",
-        goods_type: goodsType,
-        keywords: params.keyword
-      },
-      merchantToken
-    );
-    if (payload.code !== 1) {
-      if (isAuthExpiredPayload(payload)) {
-        throw new AuthExpiredError();
-      }
-      throw new Error(payload.msg || "LDXP 接口返回错误。");
-    }
-    return payload;
-  }
-
-  let payload: LdxpResponse<SearchGoodsData>;
-  try {
-    payload = await request(false);
-  } catch (error) {
-    if (!isAuthExpiredError(error)) throw error;
-    payload = await request(true);
-  }
-
-  const list = Array.isArray(payload.data?.list) ? payload.data.list : [];
-  const total = Number(payload.data?.total || 0);
-
-  return {
-    keyword: params.keyword,
-    type: params.type,
-    goods_type: goodsType,
-    current: params.current,
-    pageSize: params.pageSize,
-    total,
-    count: list.length,
-    pageCount: Math.max(1, Math.ceil(total / params.pageSize)),
-    list: list.map(normalizeGoods)
-  };
-}
-
 export default function App() {
   const [initialSearchState] = useState(loadLastSearchState);
   const [keyword, setKeyword] = useState(initialSearchState.keyword);
   const [credentials, setCredentials] = useState<LoginCredentials>(loadCredentials);
-  const [merchantToken, setMerchantToken] = useState(() => window.localStorage.getItem(tokenStorageKey) || "");
-  const [saveLogin, setSaveLogin] = useState(true);
+  const [auth] = useState(() => new AuthSession(credentials));
+  const [saveLogin, setSaveLogin] = useState(loadSaveLogin);
+  const { status: authStatus, message: authMessage } = useSyncExternalStore(auth.subscribe, auth.getSnapshot);
+  const storageWarning = useSyncExternalStore(storage.subscribe, storage.getWarning);
+  const queryClient = useQueryClient();
   const [keywordHistory, setKeywordHistory] = useState<string[]>(loadKeywordHistory);
   const [type, setType] = useState<GoodsType>(initialSearchState.type);
   const [current, setCurrent] = useState(initialSearchState.current);
@@ -407,45 +94,48 @@ export default function App() {
   const [maxPrice, setMaxPrice] = useState(initialSearchState.maxPrice);
   const [showPassword, setShowPassword] = useState(false);
   const [keywordMenuOpen, setKeywordMenuOpen] = useState(false);
-  const [authStatus, setAuthStatus] = useState<AuthStatus>(() => (window.localStorage.getItem(tokenStorageKey) ? "ready" : "missing"));
-  const [authMessage, setAuthMessage] = useState("");
   const [submitted, setSubmitted] = useState<SearchParams | null>(null);
+  const [accountVersion, setAccountVersion] = useState(0);
   const [formError, setFormError] = useState("");
   const [copiedSellerId, setCopiedSellerId] = useState<string | number | null>(null);
 
-  async function ensureMerchantToken(forceLogin = false) {
-    if (!forceLogin && merchantToken) {
-      return merchantToken;
-    }
+  useEffect(() => () => { auth.cancel(); }, [auth]);
 
-    setAuthStatus(forceLogin ? "refreshing" : "logging_in");
-    setAuthMessage(forceLogin ? "Token 已过期，正在重新登录..." : "正在登录...");
-
-    try {
-      const nextToken = await loginWithCredentials(credentials);
-      setMerchantToken(nextToken);
-      if (saveLogin) {
-        saveCredentials({ username: credentials.username.trim(), password: credentials.password });
-      } else {
-        window.localStorage.removeItem(loginCredentialsStorageKey);
-      }
-      setAuthStatus("ready");
-      setAuthMessage("已登录");
-      return nextToken;
-    } catch (error) {
-      window.localStorage.removeItem(tokenStorageKey);
-      setMerchantToken("");
-      setAuthStatus("error");
-      setAuthMessage(error instanceof Error ? error.message : "登录失败。");
-      throw error;
-    }
+  function updateCredentials(next: LoginCredentials) {
+    void queryClient.cancelQueries({ queryKey: ["search"] });
+    queryClient.removeQueries({ queryKey: ["search"] });
+    auth.setCredentials(next);
+    setCredentials(next);
+    setAccountVersion((value) => value + 1);
+    setSubmitted(null);
+    setFormError("");
   }
 
   const query = useQuery({
-    queryKey: ["search", submitted],
-    queryFn: () => fetchSearch(submitted as SearchParams, ensureMerchantToken),
-    enabled: submitted !== null
+    queryKey: ["search", accountVersion, submitted],
+    queryFn: async ({ signal }) => {
+      try { return await fetchSearch(submitted as SearchParams, auth.ensureToken, signal); }
+      catch (error) { if (!signal.aborted) auth.invalidate(error); throw error; }
+    },
+    enabled: submitted !== null,
+    retry: false,
+    refetchOnReconnect: false,
+    placeholderData: (previous, previousQuery) => submitted && previousQuery?.queryKey[1] === accountVersion ? previous : undefined,
+    gcTime: 0
   });
+
+  const invalidPriceRange = (minPrice !== "" && priceValue(minPrice) === null)
+    || (maxPrice !== "" && priceValue(maxPrice) === null)
+    || (minPrice !== "" && maxPrice !== "" && Number(minPrice) > Number(maxPrice));
+
+  useEffect(() => {
+    const state: SearchState = {
+      keyword, type, current: positiveInteger(current), pageSize: positiveInteger(pageSize, 20),
+      sortKey, onlyInStock, onlyNormal, minPrice, maxPrice
+    };
+    const timer = window.setTimeout(() => storage.set(lastSearchStorageKey, JSON.stringify(state)), 250);
+    return () => window.clearTimeout(timer);
+  }, [keyword, type, current, pageSize, sortKey, onlyInStock, onlyNormal, minPrice, maxPrice]);
 
   const rows = useMemo(() => {
     const source = query.data?.list ?? [];
@@ -453,32 +143,22 @@ export default function App() {
     const max = maxPrice === "" ? Number.POSITIVE_INFINITY : Number(maxPrice);
 
     const filtered = source.filter((goods) => {
-      const price = numericValue(goods.cost_price);
+      const price = priceValue(goods.cost_price);
       const passesStock = !onlyInStock || stockValue(goods.stock_count) > 0 || goods.goods_type !== "card";
       const passesStatus = !onlyNormal || goods.status === 1;
-      const passesMin = !Number.isFinite(min) || price >= min;
-      const passesMax = !Number.isFinite(max) || price <= max;
+      const passesMin = !Number.isFinite(min) || (price !== null && price >= min);
+      const passesMax = !Number.isFinite(max) || (price !== null && price <= max);
       return passesStock && passesStatus && passesMin && passesMax;
     });
 
     const sorted = [...filtered];
-    if (sortKey === "cost_asc") {
-      sorted.sort((a, b) => numericValue(a.cost_price) - numericValue(b.cost_price));
-    } else if (sortKey === "cost_desc") {
-      sorted.sort((a, b) => numericValue(b.cost_price) - numericValue(a.cost_price));
-    } else if (sortKey === "price_asc") {
-      sorted.sort((a, b) => numericValue(a.price) - numericValue(b.price));
-    } else if (sortKey === "price_desc") {
-      sorted.sort((a, b) => numericValue(b.price) - numericValue(a.price));
-    } else if (sortKey === "agent1_asc") {
-      sorted.sort((a, b) => numericValue(a.agent_price1) - numericValue(b.agent_price1));
-    } else if (sortKey === "agent2_asc") {
-      sorted.sort((a, b) => numericValue(a.agent_price2) - numericValue(b.agent_price2));
-    } else if (sortKey === "agent3_asc") {
-      sorted.sort((a, b) => numericValue(a.agent_price3) - numericValue(b.agent_price3));
-    } else if (sortKey === "stock_desc") {
-      sorted.sort((a, b) => stockValue(b.stock_count) - stockValue(a.stock_count));
-    }
+    const priceSorts: Partial<Record<SortKey, keyof LdxpGoods>> = {
+      cost_asc: "cost_price", cost_desc: "cost_price", price_asc: "price", price_desc: "price",
+      agent1_asc: "agent_price1", agent2_asc: "agent_price2", agent3_asc: "agent_price3"
+    };
+    const field = priceSorts[sortKey];
+    if (field) sorted.sort((a, b) => comparePrices(a[field], b[field], sortKey.endsWith("_desc")));
+    else if (sortKey === "stock_desc") sorted.sort((a, b) => stockValue(b.stock_count) - stockValue(a.stock_count));
 
     return sorted;
   }, [query.data?.list, sortKey, onlyInStock, onlyNormal, minPrice, maxPrice]);
@@ -659,8 +339,9 @@ export default function App() {
     columns,
     getCoreRowModel: getCoreRowModel()
   });
+  const gridColumns = table.getAllLeafColumns().map((column) => `${column.getSize()}px`).join(" ");
 
-  function submitSearch(nextPage = 1) {
+  function submitSearch(nextPage = 1, pagination = false) {
     const trimmedKeyword = keyword.trim();
     const nextCredentials = {
       username: credentials.username.trim(),
@@ -668,20 +349,23 @@ export default function App() {
     };
     if (!nextCredentials.username || !nextCredentials.password.trim()) {
       setFormError("请先填写 LDXP 用户名和密码。");
-      setAuthStatus("missing");
       return;
     }
-    if (!trimmedKeyword) {
+    if (!trimmedKeyword && !(pagination && submitted)) {
       setFormError("请输入搜索关键词。");
       return;
     }
 
-    const normalizedPageSize = Math.max(1, Math.floor(Number(pageSize) || 20));
-    const normalizedPage = Math.max(1, Math.floor(Number(nextPage) || 1));
-    const nextKeywordHistory = [trimmedKeyword, ...keywordHistory.filter((item) => item !== trimmedKeyword)].slice(0, maxKeywordHistory);
+    if (invalidPriceRange) { setFormError("请输入有效的成本价区间，最低成本不能大于最高成本。"); return; }
+    const normalizedPageSize = positiveInteger(pageSize, 20);
+    const sizeChanged = submitted && normalizedPageSize !== submitted.pageSize;
+    const normalizedPage = sizeChanged ? 1 : Math.min(positiveInteger(nextPage), pagination ? pageCount : Number.MAX_SAFE_INTEGER);
+    const searchKeyword = pagination && submitted ? submitted.keyword : trimmedKeyword;
+    const searchType = pagination && submitted ? submitted.type : type;
+    const nextKeywordHistory = [searchKeyword, ...keywordHistory.filter((item) => item !== searchKeyword)].slice(0, maxKeywordHistory);
     const searchState: SearchState = {
-      keyword: trimmedKeyword,
-      type,
+      keyword: searchKeyword,
+      type: searchType,
       current: normalizedPage,
       pageSize: normalizedPageSize,
       sortKey,
@@ -690,25 +374,18 @@ export default function App() {
       minPrice,
       maxPrice
     };
-    if (saveLogin) {
-      saveCredentials(nextCredentials);
-    } else {
-      window.localStorage.removeItem(loginCredentialsStorageKey);
-    }
-    window.localStorage.setItem(keywordHistoryStorageKey, JSON.stringify(nextKeywordHistory));
-    window.localStorage.setItem(lastSearchStorageKey, JSON.stringify(searchState));
+    auth.persist();
+    storage.set(keywordHistoryStorageKey, JSON.stringify(nextKeywordHistory));
+    storage.set(lastSearchStorageKey, JSON.stringify(searchState));
     setCredentials(nextCredentials);
     setKeywordHistory(nextKeywordHistory);
     setFormError("");
     setCurrent(normalizedPage);
     setPageSize(normalizedPageSize);
-    setSubmitted({
-      keyword: trimmedKeyword,
-      type,
-      current: normalizedPage,
-      pageSize: normalizedPageSize,
-      requestId: Date.now()
-    });
+    const next = { keyword: searchKeyword, type: searchType, current: normalizedPage, pageSize: normalizedPageSize };
+    if (submitted && JSON.stringify(next) === JSON.stringify(submitted)) void query.refetch();
+    else setSubmitted(next);
+    setKeywordMenuOpen(false);
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -719,7 +396,7 @@ export default function App() {
   function handleDeleteHistoryItem(itemToRemove: string, event: React.MouseEvent) {
     event.stopPropagation();
     const nextKeywordHistory = keywordHistory.filter((item) => item !== itemToRemove);
-    window.localStorage.setItem(keywordHistoryStorageKey, JSON.stringify(nextKeywordHistory));
+    storage.set(keywordHistoryStorageKey, JSON.stringify(nextKeywordHistory));
     setKeywordHistory(nextKeywordHistory);
   }
 
@@ -795,7 +472,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="grid gap-2 rounded-md border border-border bg-background p-2 lg:grid-cols-[minmax(260px,0.9fr)_minmax(360px,1.2fr)_auto] lg:items-end">
+          <div className="grid gap-2 rounded-md border border-border bg-background p-2 2xl:grid-cols-[minmax(260px,0.9fr)_minmax(500px,1.2fr)_auto] 2xl:items-end">
             <div>
               <label className="block" htmlFor="keyword">
                 <span className="mb-1 block text-xs font-medium text-muted-foreground">商品关键词</span>
@@ -887,8 +564,8 @@ export default function App() {
               </label>
             </div>
 
-            <div className="grid gap-2 md:grid-cols-[minmax(160px,0.9fr)_minmax(180px,1fr)_auto_auto_auto]">
-              <label className="block" htmlFor="ldxp-username">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto_auto]">
+              <label className="col-span-3 block sm:col-span-1" htmlFor="ldxp-username">
                 <span className="mb-1 block text-xs font-medium text-muted-foreground">LDXP 用户名</span>
                 <div className="relative">
                   <ShieldCheck className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -896,13 +573,13 @@ export default function App() {
                     id="ldxp-username"
                     className="pl-9"
                     value={credentials.username}
-                    onChange={(event) => setCredentials((value) => ({ ...value, username: event.target.value }))}
+                    onChange={(event) => updateCredentials({ ...credentials, username: event.target.value })}
                     placeholder="用户名"
                     autoComplete="username"
                   />
                 </div>
               </label>
-              <label className="block" htmlFor="ldxp-password">
+              <label className="col-span-3 block sm:col-span-1" htmlFor="ldxp-password">
                 <span className="mb-1 block text-xs font-medium text-muted-foreground">LDXP 密码</span>
                 <div className="relative">
                   <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -910,7 +587,7 @@ export default function App() {
                     id="ldxp-password"
                     className="pl-9"
                     value={credentials.password}
-                    onChange={(event) => setCredentials((value) => ({ ...value, password: event.target.value }))}
+                    onChange={(event) => updateCredentials({ ...credentials, password: event.target.value })}
                     placeholder="密码"
                     type={showPassword ? "text" : "password"}
                     autoComplete="current-password"
@@ -921,7 +598,7 @@ export default function App() {
                 <input
                   className="h-4 w-4"
                   checked={saveLogin}
-                  onChange={(event) => setSaveLogin(event.target.checked)}
+                  onChange={(event) => { setSaveLogin(event.target.checked); auth.setSave(event.target.checked); }}
                   type="checkbox"
                 />
                 保存
@@ -943,21 +620,17 @@ export default function App() {
                 variant="outline"
                 size="icon"
                 onClick={() => {
-                  clearCredentials();
-                  setCredentials({ username: "", password: "" });
-                  setMerchantToken("");
-                  setAuthStatus("missing");
-                  setAuthMessage("");
+                  updateCredentials({ username: "", password: "" });
                 }}
                 aria-label="清空登录凭据"
                 title="清空登录凭据"
               >
                 <X className="h-4 w-4" />
               </Button>
-              {authMessage && <div className="text-xs text-muted-foreground md:col-span-5">{authMessage}</div>}
+              {authMessage && <div className="col-span-3 text-xs text-muted-foreground sm:col-span-5">{authMessage}</div>}
             </div>
 
-            <Button className="h-10 lg:self-end" type="submit" disabled={query.isFetching}>
+            <Button className="h-10 2xl:self-end" type="submit" disabled={query.isFetching}>
               {query.isFetching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
               搜索
             </Button>
@@ -995,7 +668,6 @@ export default function App() {
                 onChange={(event) => {
                   const next = event.target.value as SortKey;
                   setSortKey(next);
-                  window.localStorage.setItem("ldxp-sort-key", next);
                 }}
               >
                 <option value="default">接口顺序</option>
@@ -1010,7 +682,7 @@ export default function App() {
               </select>
             </label>
             <label className="block" htmlFor="min-price">
-              <span className="mb-1 block text-xs font-medium text-muted-foreground">最低价</span>
+              <span className="mb-1 block text-xs font-medium text-muted-foreground">最低成本</span>
               <Input
                 id="min-price"
                 value={minPrice}
@@ -1022,7 +694,7 @@ export default function App() {
               />
             </label>
             <label className="block" htmlFor="max-price">
-              <span className="mb-1 block text-xs font-medium text-muted-foreground">最高价</span>
+              <span className="mb-1 block text-xs font-medium text-muted-foreground">最高成本</span>
               <Input
                 id="max-price"
                 value={maxPrice}
@@ -1065,7 +737,6 @@ export default function App() {
                     setOnlyInStock(false);
                     setMinPrice("");
                     setMaxPrice("");
-                    window.localStorage.setItem("ldxp-sort-key", "default");
                   }}
                 >
                   <RotateCcw className="mr-1 h-4 w-4" />
@@ -1078,6 +749,8 @@ export default function App() {
       </section>
 
       <section id="results" className="mx-auto max-w-7xl px-4 py-4">
+        {storageWarning && <p role="status" className="mb-3 text-sm text-amber-700">{storageWarning}</p>}
+        {invalidPriceRange && <p role="alert" className="mb-3 text-sm text-destructive">成本价区间无效：最低成本不能大于最高成本，且必须为非负数。</p>}
         {(formError || query.error) && (
           <div className="mb-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -1094,8 +767,6 @@ export default function App() {
 
         {!submitted ? (
           <EmptyState title="填写账号密码和关键词后搜索" description="不会自动请求；点击搜索按钮或在输入框按回车触发。" />
-        ) : !query.isFetching && !query.error && rows.length === 0 ? (
-          <EmptyState title="当前页没有商品" description="换一个关键词、类型，或调整页码和每页数量。" />
         ) : (
           <>
             <div className="mb-3 rounded-md border border-border bg-card px-3 py-2">
@@ -1105,14 +776,14 @@ export default function App() {
                   {rawRowsCount !== rows.length ? <Badge>筛选后 {rows.length} 条</Badge> : null}
                   <span className="text-xs text-muted-foreground">排序和筛选仅作用于当前页。</span>
                 </div>
-                <div className="flex flex-wrap items-end gap-2">
+                <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => { event.preventDefault(); submitSearch(current, true); }}>
                   <label className="block" htmlFor="page-current">
                     <span className="mb-1 block text-xs font-medium text-muted-foreground">页码</span>
                     <Input
                       id="page-current"
                       className="h-9 w-20"
-                      value={current}
-                      onChange={(event) => setCurrent(Math.max(1, Number(event.target.value) || 1))}
+                      value={current || ""}
+                      onChange={(event) => setCurrent(event.target.value === "" ? 0 : Number(event.target.value))}
                       min={1}
                       type="number"
                       inputMode="numeric"
@@ -1123,19 +794,20 @@ export default function App() {
                     <Input
                       id="page-size"
                       className="h-9 w-24"
-                      value={pageSize}
-                      onChange={(event) => setPageSize(Math.max(1, Number(event.target.value) || 1))}
+                      value={pageSize || ""}
+                      onChange={(event) => { setPageSize(event.target.value === "" ? 0 : Number(event.target.value)); setCurrent(1); }}
                       min={1}
                       type="number"
                       inputMode="numeric"
                     />
                   </label>
+                  <Button type="submit" variant="outline" size="sm" disabled={query.isFetching}>跳转 / 应用</Button>
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     disabled={query.isFetching || safeCurrent <= 1}
-                    onClick={() => submitSearch(safeCurrent - 1)}
+                    onClick={() => submitSearch(safeCurrent - 1, true)}
                   >
                     <ChevronLeft className="mr-1 h-4 w-4" />
                     上一页
@@ -1145,42 +817,33 @@ export default function App() {
                     variant="outline"
                     size="sm"
                     disabled={query.isFetching || safeCurrent >= pageCount}
-                    onClick={() => submitSearch(safeCurrent + 1)}
+                    onClick={() => submitSearch(safeCurrent + 1, true)}
                   >
                     下一页
                     <ChevronRight className="ml-1 h-4 w-4" />
                   </Button>
-                </div>
+                </form>
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
+            {!query.isFetching && !query.error && rows.length === 0 && (
+              <EmptyState title={rawRowsCount > 0 ? "当前筛选没有匹配商品" : "当前页没有商品"} description={rawRowsCount > 0 ? "调整成本价或库存筛选。" : "换一个关键词、类型，或调整页码。"} />
+            )}
+            <div aria-busy={query.isFetching} className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
               <div className="overflow-x-auto">
                 <div className="min-w-[1220px]">
-                  <div className="grid border-b border-border bg-muted/70" style={{ gridTemplateColumns: table.getAllLeafColumns().map((column) => `${column.getSize()}px`).join(" ") }}>
+                  <div className="grid border-b border-border bg-muted/70" style={{ gridTemplateColumns: gridColumns }}>
                     {table.getHeaderGroups()[0]?.headers.map((header) => (
                       <div key={header.id} className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-normal text-muted-foreground">
                         {flexRender(header.column.columnDef.header, header.getContext())}
                       </div>
                     ))}
                   </div>
-                  <div>
-                    {table.getRowModel().rows.map((row) => (
-                      <div
-                        key={row.id}
-                        className="grid min-h-[82px] border-b border-border bg-card transition-colors duration-200 hover:bg-blue-50/45"
-                        style={{
-                          gridTemplateColumns: table.getAllLeafColumns().map((column) => `${column.getSize()}px`).join(" ")
-                        }}
-                      >
-                        {row.getVisibleCells().map((cell) => (
-                          <div key={cell.id} className="min-w-0 px-3 py-3">
-                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                          </div>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
+                  <ResultRows
+                    key={JSON.stringify([submitted, accountVersion, sortKey, onlyInStock, onlyNormal, minPrice, maxPrice])}
+                    rows={table.getRowModel().rows}
+                    columns={gridColumns}
+                  />
                 </div>
               </div>
             </div>
